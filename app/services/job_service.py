@@ -175,6 +175,38 @@ class JobService:
             self.logger.error(f"获取Job详情失败: {job_id}, 错误: {e}")
             raise JobException(ErrorCode.JOB_NOT_FOUND, job_id, str(e))
     
+    async def get_job_task_ids(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取Job下的所有任务ID列表
+        
+        Args:
+            job_id: Job ID
+            
+        Returns:
+            Optional[Dict[str, Any]]: 包含task_ids列表和总数的字典
+        """
+        try:
+            # 获取Job
+            job = await self.get_job_by_id(job_id)
+            if not job:
+                return None
+            
+            # 获取所有任务的ID
+            task_ids = [task.task_id for task in job.tasks.all()]
+            
+            result = {
+                "job_id": job_id,
+                "task_ids": task_ids,
+                "total_count": len(task_ids)
+            }
+            
+            self.logger.debug(f"获取Job任务ID列表: {job_id}, 任务数: {len(task_ids)}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"获取Job任务ID列表失败: {job_id}, 错误: {e}")
+            raise JobException(ErrorCode.JOB_NOT_FOUND, job_id, str(e))
+    
     async def update_job_status(self, job_id: str, status: JobStatusEnum, error_message: Optional[str] = None):
         """
         更新Job状态

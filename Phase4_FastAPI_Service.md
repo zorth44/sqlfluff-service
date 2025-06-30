@@ -35,7 +35,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.services.job_service import JobService
-from app.schemas.job import JobCreateRequest, JobCreateResponse, JobResponse
+from app.schemas.job import JobCreateRequest, JobCreateResponse, JobResponse, JobTaskIdsResponse
 
 router = APIRouter()
 
@@ -61,6 +61,16 @@ async def get_job(
     # 验证job_id格式
     # 调用JobService查询
     # 返回Job信息及Tasks分页列表
+
+@router.get("/jobs/{job_id}/tasks", response_model=JobTaskIdsResponse)
+async def get_job_task_ids(
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """获取核验工作下的所有任务ID列表"""
+    # 验证job_id格式
+    # 调用JobService获取任务ID列表
+    # 返回task_id列表和总数
 ```
 
 2. 创建`app/api/routes/tasks.py`，实现Task相关接口：

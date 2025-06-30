@@ -293,4 +293,24 @@ class JobStatistics(BaseModel):
                 "failed_jobs": 35,
                 "avg_processing_time": 12.5
             }
+        }
+
+
+class JobTaskIdsResponse(BaseModel):
+    """工作任务ID列表响应模型"""
+    job_id: str = Field(description="工作ID")
+    task_ids: List[str] = Field(description="任务ID列表")
+    total_count: int = Field(description="任务总数")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "job_id": "job-d8b8a7e0-4f7f-4f7b-8f1e-8e6a1e8e6a1e",
+                "task_ids": [
+                    "task-e0e1f2e3-4f5f-6a6b-7c7d-8e8f9a9b0c0d",
+                    "task-f1f2e3e4-5f6f-7a7b-8c8d-9e9f0a0b1c1d",
+                    "task-g2g3f4f5-6f7f-8a8b-9c9d-0e0f1a1b2c2d"
+                ],
+                "total_count": 3
+            }
         } 

@@ -15,7 +15,7 @@ from app.api.deps import (
 from app.services.job_service import JobService
 from app.schemas.job import (
     JobCreateRequest, JobCreateResponse, JobDetailResponse,
-    JobListResponse, JobSummary, JobStatistics
+    JobListResponse, JobSummary, JobStatistics, JobTaskIdsResponse
 )
 from app.schemas.common import JobStatusEnum, SubmissionTypeEnum
 from app.core.logging import api_logger
@@ -156,6 +156,45 @@ async def get_job_statistics(
     except Exception as e:
         api_logger.error(f"查询Job统计失败: {e}")
         raise handle_service_exception(e, "查询统计信息")
+
+
+@router.get("/jobs/{job_id}/tasks", response_model=JobTaskIdsResponse)
+async def get_job_task_ids(
+    job_id: str = Depends(validate_job_id),
+    job_service: JobService = Depends(get_job_service)
+):
+    """
+    获取核验工作下的所有任务ID列表
+    
+    返回指定Job下的所有Task ID，用于批量操作或快速查看任务列表。
+    """
+    try:
+        api_logger.info(f"查询Job任务ID列表: {job_id}")
+        
+        # 调用业务服务获取任务ID列表
+        task_ids_info = await job_service.get_job_task_ids(job_id)
+        
+        if not task_ids_info:
+            api_logger.warning(f"Job不存在: {job_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"核验工作不存在: {job_id}"
+            )
+        
+        response = JobTaskIdsResponse(
+            job_id=task_ids_info["job_id"],
+            task_ids=task_ids_info["task_ids"],
+            total_count=task_ids_info["total_count"]
+        )
+        
+        api_logger.debug(f"Job任务ID列表查询成功: {job_id}, 任务数: {task_ids_info['total_count']}")
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"查询Job任务ID列表失败: {job_id}, 错误: {e}")
+        raise handle_service_exception(e, "查询任务ID列表")
 
 
 # ============= 内部管理接口（可选实现） =============
