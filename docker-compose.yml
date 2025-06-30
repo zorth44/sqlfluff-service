@@ -1,0 +1,162 @@
+version: '3.8'
+
+services:
+  # MySQL数据库
+  mysql:
+    image: mysql:8.0
+    container_name: sqlfluff-mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpassword
+      - MYSQL_DATABASE=sqlfluff
+      - MYSQL_USER=sqlfluff_user
+      - MYSQL_PASSWORD=sqlfluff_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./scripts/init_mysql.sql:/docker-entrypoint-initdb.d/init.sql
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  # Redis消息队列
+  redis:
+    image: redis:7-alpine
+    container_name: sqlfluff-redis
+    ports:
+      - "1:1"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # NFS共享存储（使用本地目录模拟）
+  nfs-share:
+    image: busybox:latest
+    container_name: sqlfluff-nfs-share
+    volumes:
+      - nfs_share:/mnt/nfs_share
+    command: tail -f /dev/null
+
+  # Web服务
+  web:
+    build: .
+    container_name: sqlfluff-web
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=mysql+pymysql://sqlfluff_user:sqlfluff_password@mysql:3306/sqlfluff
+      - REDIS_HOST=redis
+      - REDIS_PORT=1
+      - REDIS_DB_BROKER=0
+      - REDIS_DB_RESULT=1
+      - NFS_SHARE_ROOT_PATH=/mnt/nfs_share/sql_linting
+      - ENVIRONMENT=production
+      - PORT=8000
+      - GUNICORN_WORKERS=4
+      - CONSUL_HOST=consul
+      - CONSUL_PORT=8500
+    volumes:
+      - nfs_share:/mnt/nfs_share
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ./scripts/start_web.sh
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Worker服务
+  worker:
+    build: .
+    container_name: sqlfluff-worker
+    environment:
+      - DATABASE_URL=mysql+pymysql://sqlfluff_user:sqlfluff_password@mysql:3306/sqlfluff
+      - REDIS_HOST=redis
+      - REDIS_PORT=1
+      - REDIS_DB_BROKER=0
+      - REDIS_DB_RESULT=1
+      - NFS_SHARE_ROOT_PATH=/mnt/nfs_share/sql_linting
+      - CELERY_WORKER_CONCURRENCY=4
+      - CELERY_LOG_LEVEL=INFO
+      - CELERY_QUEUES=default,sql_analysis,zip_processing
+    volumes:
+      - nfs_share:/mnt/nfs_share
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ./scripts/start_worker.sh
+    deploy:
+      replicas: 2
+
+  # Consul服务发现
+  consul:
+    image: consul:1.15
+    container_name: sqlfluff-consul
+    ports:
+      - "8500:8500"
+    command: consul agent -server -bootstrap-expect=1 -ui -client=0.0.0.0
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Prometheus监控
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: sqlfluff-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+
+  # Grafana可视化
+  grafana:
+    image: grafana/grafana:latest
+    container_name: sqlfluff-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+
+volumes:
+  mysql_data:
+    driver: local
+  redis_data:
+    driver: local
+  nfs_share:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  default:
+    name: sqlfluff-network 
