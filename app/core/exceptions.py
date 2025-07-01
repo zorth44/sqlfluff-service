@@ -131,6 +131,10 @@ class BaseException(Exception):
     
     def __str__(self) -> str:
         return f"[{self.code}] {self.detail}"
+    
+    def __reduce__(self):
+        """支持Celery序列化"""
+        return (BaseException, (self.error_code, self.detail, self.context))
 
 
 class ValidationException(BaseException):
@@ -144,6 +148,14 @@ class ValidationException(BaseException):
             context['value'] = str(value)
         
         super().__init__(ErrorCode.VALIDATION_ERROR, detail, context)
+    
+    def __reduce__(self):
+        """支持Celery序列化"""
+        return (ValidationException, (
+            self.detail,
+            self.context.get('field'),
+            self.context.get('value')
+        ))
 
 
 class ResourceNotFoundException(BaseException):
@@ -156,6 +168,13 @@ class ResourceNotFoundException(BaseException):
             'resource_id': resource_id
         }
         super().__init__(ErrorCode.RESOURCE_NOT_FOUND, detail, context)
+    
+    def __reduce__(self):
+        """支持Celery序列化"""
+        return (ResourceNotFoundException, (
+            self.context.get('resource_type', ''),
+            self.context.get('resource_id', '')
+        ))
 
 
 class DatabaseException(BaseException):
@@ -171,6 +190,15 @@ class DatabaseException(BaseException):
         
         error_detail = detail or f"数据库{operation}操作失败"
         super().__init__(ErrorCode.DATABASE_QUERY_ERROR, error_detail, context)
+    
+    def __reduce__(self):
+        """支持Celery序列化"""
+        # 注意：original_error 参数在序列化时会丢失，因为异常对象不容易序列化
+        return (DatabaseException, (
+            self.context.get('operation', ''),
+            self.detail,
+            None  # original_error 不序列化
+        ))
 
 
 class CeleryException(BaseException):
@@ -185,6 +213,14 @@ class CeleryException(BaseException):
         
         error_detail = detail or f"任务{task_name}执行失败"
         super().__init__(ErrorCode.TASK_EXECUTION_ERROR, error_detail, context)
+    
+    def __reduce__(self):
+        """支持Celery序列化"""
+        return (CeleryException, (
+            self.context.get('task_name', ''),
+            self.detail,
+            self.context.get('task_id')
+        ))
 
 
 class FileException(BaseException):
@@ -198,6 +234,14 @@ class FileException(BaseException):
         
         error_detail = detail or f"文件{operation}操作失败: {file_path}"
         super().__init__(ErrorCode.FILE_ACCESS_ERROR, error_detail, context)
+    
+    def __reduce__(self):
+        """支持Celery序列化"""
+        return (FileException, (
+            self.context.get('operation', ''),
+            self.context.get('file_path', ''),
+            self.detail
+        ))
 
 
 class ZipException(BaseException):
@@ -211,6 +255,14 @@ class ZipException(BaseException):
         
         error_detail = detail or f"ZIP{operation}操作失败: {zip_path}"
         super().__init__(ErrorCode.ZIP_EXTRACT_ERROR, error_detail, context)
+    
+    def __reduce__(self):
+        """支持Celery序列化"""
+        return (ZipException, (
+            self.context.get('operation', ''),
+            self.context.get('zip_path', ''),
+            self.detail
+        ))
 
 
 class JobException(BaseException):
@@ -223,6 +275,14 @@ class JobException(BaseException):
         
         error_detail = detail or error_code.message
         super().__init__(error_code, error_detail, context)
+    
+    def __reduce__(self):
+        """支持Celery序列化"""
+        return (JobException, (
+            self.error_code,
+            self.context.get('job_id', ''),
+            self.detail
+        ))
 
 
 class TaskException(BaseException):
@@ -235,6 +295,14 @@ class TaskException(BaseException):
         
         error_detail = detail or error_code.message
         super().__init__(error_code, error_detail, context)
+    
+    def __reduce__(self):
+        """支持Celery序列化"""
+        return (TaskException, (
+            self.error_code,
+            self.context.get('task_id', ''),
+            self.detail
+        ))
 
 
 class SQLFluffException(BaseException):

@@ -46,13 +46,95 @@ class SQLFluffService:
         # 从缓存中获取或创建新的Linter
         if dialect not in self._linter_cache:
             try:
-                self._linter_cache[dialect] = Linter(dialect=dialect)
+                linter = Linter(dialect=dialect)
+                
+                # 手动过滤插件规则以解决SQLFluff 3.4.1中方言过滤的问题
+                filtered_linter = self._filter_rules_by_dialect(linter, dialect)
+                
+                self._linter_cache[dialect] = filtered_linter
                 self.logger.debug(f"创建新的Linter实例: {dialect}")
             except Exception as e:
                 self.logger.error(f"创建Linter失败，方言: {dialect}, 错误: {e}")
                 raise SQLFluffException("创建Linter", dialect, str(e))
         
         return self._linter_cache[dialect]
+    
+    def _filter_rules_by_dialect(self, linter: Linter, current_dialect: str) -> Linter:
+        """
+        手动过滤规则，确保只有适用于当前方言的规则被应用
+        
+        这是为了解决SQLFluff 3.4.1中插件规则方言过滤失效的问题
+        
+        Args:
+            linter: 原始Linter实例
+            current_dialect: 当前使用的方言
+            
+        Returns:
+            Linter: 过滤后的Linter实例
+        """
+        try:
+            # 获取所有规则
+            all_rules = linter.rule_tuples()
+            rules_to_exclude = []
+            
+            for rule in all_rules:
+                # 检查规则是否需要被排除
+                should_exclude = False
+                
+                # 方法1: 检查规则类的方言属性（适用于大多数插件规则）
+                if hasattr(rule, '_rule_class'):
+                    rule_class = rule._rule_class
+                    if hasattr(rule_class, 'dialects') and rule_class.dialects:
+                        dialects = rule_class.dialects
+                        # 如果规则指定了方言限制，且当前方言不在其中，则排除
+                        if isinstance(dialects, (set, list, tuple)):
+                            if current_dialect not in dialects:
+                                should_exclude = True
+                        elif isinstance(dialects, str):
+                            if current_dialect != dialects:
+                                should_exclude = True
+                
+                # 方法2: 直接检查规则对象的方言属性（备用方法）
+                if not should_exclude and hasattr(rule, 'dialects') and rule.dialects:
+                    dialects = rule.dialects
+                    if isinstance(dialects, (set, list, tuple)):
+                        if current_dialect not in dialects:
+                            should_exclude = True
+                    elif isinstance(dialects, str):
+                        if current_dialect != dialects:
+                            should_exclude = True
+                
+                # 方法3: 基于规则代码的特殊处理（针对已知的自定义规则）
+                if not should_exclude and 'HiveCustom' in rule.code:
+                    # HiveCustom规则只应该在hive方言中应用
+                    if current_dialect != 'hive':
+                        should_exclude = True
+                        self.logger.debug(f"基于规则代码排除规则: {rule.code} (当前方言: {current_dialect})")
+                
+                if should_exclude:
+                    rules_to_exclude.append(rule.code)
+                    self.logger.debug(f"规则 {rule.code} 被标记为排除 (方言: {current_dialect})")
+            
+            # 如果有规则需要排除，创建新的linter
+            if rules_to_exclude:
+                self.logger.info(f"为方言 {current_dialect} 排除了以下规则: {rules_to_exclude}")
+                
+                from sqlfluff.core import Linter
+                filtered_linter = Linter(
+                    dialect=current_dialect,
+                    exclude_rules=rules_to_exclude
+                )
+                
+                self.logger.debug(f"已为方言 {current_dialect} 过滤规则，排除了 {len(rules_to_exclude)} 个规则")
+                return filtered_linter
+            
+            # 如果没有规则需要过滤，返回原始linter
+            self.logger.debug(f"方言 {current_dialect} 无需过滤规则")
+            return linter
+            
+        except Exception as e:
+            self.logger.warning(f"规则过滤失败，使用原始linter: {e}")
+            return linter
     
     def analyze_sql_file(self, file_path: str, dialect: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -140,7 +222,8 @@ class SQLFluffService:
             if not parse_tree_info:
                 try:
                     parse_tree = sqlfluff.parse(sql_content, dialect=used_dialect)
-                    parse_tree_info = parse_tree
+                    # 统一转换为我们的详细格式
+                    parse_tree_info = self._extract_parse_tree_info(parse_tree)
                     self.logger.debug(f"使用简单API成功获取解析树: {file_name}")
                 except Exception as e:
                     self.logger.debug(f"简单API获取解析树失败: {file_name}, 错误: {e}")
@@ -395,18 +478,11 @@ class SQLFluffService:
             
             # 添加解析树信息（如果可用）
             if parse_tree:
-                if isinstance(parse_tree, dict):
-                    # 新格式：从_extract_parse_tree_info返回的结构化信息
-                    result["parse_tree"] = {
-                        "description": "SQLFluff解析树，显示SQL语句的语法结构",
-                        "tree_info": parse_tree
-                    }
-                else:
-                    # 旧格式：直接的解析树对象
-                    result["parse_tree"] = {
-                        "description": "SQLFluff解析树，显示SQL语句的语法结构",
-                        "tree_structure": parse_tree
-                    }
+                # 现在parse_tree应该总是通过_extract_parse_tree_info处理过的dict格式
+                result["parse_tree"] = {
+                    "description": "SQLFluff解析树，显示SQL语句的语法结构",
+                    "tree_info": parse_tree
+                }
             
             return result
             
@@ -437,18 +513,11 @@ class SQLFluffService:
             
             # 如果有解析树，也包含在错误结果中
             if parse_tree:
-                if isinstance(parse_tree, dict):
-                    # 新格式：从_extract_parse_tree_info返回的结构化信息
-                    error_result["parse_tree"] = {
-                        "description": "SQLFluff解析树，显示SQL语句的语法结构",
-                        "tree_info": parse_tree
-                    }
-                else:
-                    # 旧格式：直接的解析树对象
-                    error_result["parse_tree"] = {
-                        "description": "SQLFluff解析树，显示SQL语句的语法结构",
-                        "tree_structure": parse_tree
-                    }
+                # 现在parse_tree应该总是通过_extract_parse_tree_info处理过的dict格式
+                error_result["parse_tree"] = {
+                    "description": "SQLFluff解析树，显示SQL语句的语法结构",
+                    "tree_info": parse_tree
+                }
             
             return error_result
     
