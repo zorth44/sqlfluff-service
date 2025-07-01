@@ -122,8 +122,31 @@ class SQLFluffService:
             # 执行Linting
             lint_result = linter.lint_string(sql_content)
             
+            # 获取解析树 - 优先从linter结果中获取，fallback到直接解析
+            parse_tree = None
+            parse_tree_info = None
+            
+            # 方法1: 尝试从linter内部获取解析树
+            try:
+                # 重新解析以获取解析树，但保留错误信息
+                parsed_string = linter.parse_string(sql_content)
+                if parsed_string and parsed_string.tree:
+                    parse_tree_info = self._extract_parse_tree_info(parsed_string.tree)
+                    self.logger.debug(f"从linter成功获取解析树: {file_name}")
+            except Exception as e:
+                self.logger.debug(f"从linter获取解析树失败: {file_name}, 错误: {e}")
+            
+            # 方法2: 如果方法1失败，尝试使用简单API（仅在无语法错误时有效）
+            if not parse_tree_info:
+                try:
+                    parse_tree = sqlfluff.parse(sql_content, dialect=used_dialect)
+                    parse_tree_info = parse_tree
+                    self.logger.debug(f"使用简单API成功获取解析树: {file_name}")
+                except Exception as e:
+                    self.logger.debug(f"简单API获取解析树失败: {file_name}, 错误: {e}")
+            
             # 格式化结果
-            formatted_result = self._format_lint_result(lint_result, sql_content, file_name, used_dialect, linter)
+            formatted_result = self._format_lint_result(lint_result, sql_content, file_name, used_dialect, linter, parse_tree_info)
             
             self.logger.debug(f"SQL内容分析完成: {file_name}, 方言: {used_dialect}")
             return formatted_result
@@ -274,7 +297,7 @@ class SQLFluffService:
         except Exception as e:
             raise SQLFluffException("读取SQL文件", relative_path, f"文件读取失败: {str(e)}")
     
-    def _format_lint_result(self, lint_result, sql_content: str, file_name: str, dialect: str, linter: Linter) -> Dict[str, Any]:
+    def _format_lint_result(self, lint_result, sql_content: str, file_name: str, dialect: str, linter: Linter, parse_tree: Optional[Dict] = None) -> Dict[str, Any]:
         """格式化分析结果为标准JSON格式"""
         try:
             violations = []
@@ -370,12 +393,27 @@ class SQLFluffService:
                 }
             }
             
+            # 添加解析树信息（如果可用）
+            if parse_tree:
+                if isinstance(parse_tree, dict):
+                    # 新格式：从_extract_parse_tree_info返回的结构化信息
+                    result["parse_tree"] = {
+                        "description": "SQLFluff解析树，显示SQL语句的语法结构",
+                        "tree_info": parse_tree
+                    }
+                else:
+                    # 旧格式：直接的解析树对象
+                    result["parse_tree"] = {
+                        "description": "SQLFluff解析树，显示SQL语句的语法结构",
+                        "tree_structure": parse_tree
+                    }
+            
             return result
             
         except Exception as e:
             self.logger.error(f"格式化分析结果失败: {e}")
             # 返回错误结果
-            return {
+            error_result = {
                 "violations": [],
                 "summary": {
                     "total_violations": 0,
@@ -396,6 +434,23 @@ class SQLFluffService:
                     "error": str(e)
                 }
             }
+            
+            # 如果有解析树，也包含在错误结果中
+            if parse_tree:
+                if isinstance(parse_tree, dict):
+                    # 新格式：从_extract_parse_tree_info返回的结构化信息
+                    error_result["parse_tree"] = {
+                        "description": "SQLFluff解析树，显示SQL语句的语法结构",
+                        "tree_info": parse_tree
+                    }
+                else:
+                    # 旧格式：直接的解析树对象
+                    error_result["parse_tree"] = {
+                        "description": "SQLFluff解析树，显示SQL语句的语法结构",
+                        "tree_structure": parse_tree
+                    }
+            
+            return error_result
     
     def _get_violation_severity(self, violation) -> str:
         """获取违规项严重程度"""
@@ -430,4 +485,234 @@ class SQLFluffService:
                 "file_name": os.path.basename(file_path),
                 "file_size": 0,
                 "last_modified": datetime.now().isoformat()
-            } 
+            }
+    
+    def _extract_parse_tree_info(self, parse_tree) -> Dict[str, Any]:
+        """
+        从SQLFluff解析树中提取结构化信息
+        
+        Args:
+            parse_tree: SQLFluff解析树对象
+            
+        Returns:
+            Dict[str, Any]: 格式化的解析树信息
+        """
+        try:
+            if not parse_tree:
+                return None
+            
+            # 获取完整的解析树结构（类似日志中的格式）
+            detailed_tree = self._get_detailed_tree_structure(parse_tree)
+            
+            # 获取基本的字符串表示
+            tree_str = str(parse_tree)
+            
+            # 提取关键信息
+            tree_info = {
+                "tree_type": parse_tree.__class__.__name__ if hasattr(parse_tree, '__class__') else "unknown",
+                "raw_tree": tree_str,
+                "detailed_structure": detailed_tree,  # 新增：详细的解析树结构
+                "contains_unparsable": "unparsable" in detailed_tree.lower() if detailed_tree else False,
+                "has_syntax_errors": False
+            }
+            
+            # 检查是否有语法错误
+            if hasattr(parse_tree, 'get_error_segments'):
+                try:
+                    error_segments = parse_tree.get_error_segments()
+                    if error_segments:
+                        tree_info["has_syntax_errors"] = True
+                        tree_info["error_segments"] = [str(seg) for seg in error_segments]
+                except Exception:
+                    pass
+            
+            # 尝试获取更详细的结构信息
+            if hasattr(parse_tree, 'segments'):
+                try:
+                    tree_info["segment_count"] = len(parse_tree.segments)
+                except Exception:
+                    pass
+            
+            # 检查是否包含不可解析的段
+            if detailed_tree and "unparsable" in detailed_tree.lower():
+                tree_info["contains_unparsable"] = True
+                tree_info["has_syntax_errors"] = True
+            
+            return tree_info
+            
+        except Exception as e:
+            self.logger.error(f"提取解析树信息失败: {e}")
+            return {
+                "error": f"解析树信息提取失败: {str(e)}",
+                "raw_tree": str(parse_tree) if parse_tree else "None"
+            }
+    
+    def _get_detailed_tree_structure(self, parse_tree) -> str:
+        """
+        获取详细的解析树结构，尝试生成类似SQLFluff日志的格式
+        
+        Args:
+            parse_tree: SQLFluff解析树对象
+            
+        Returns:
+            str: 格式化的解析树字符串
+        """
+        try:
+            if not parse_tree:
+                return ""
+            
+            # 尝试多种方法获取详细的解析树结构
+            detailed_structure = None
+            
+            # 方法1: 尝试使用_pretty_format方法（SQLFluff内部可能有）
+            if hasattr(parse_tree, '_pretty_format'):
+                try:
+                    detailed_structure = parse_tree._pretty_format()
+                    self.logger.debug("使用_pretty_format方法获取解析树")
+                except Exception as e:
+                    self.logger.debug(f"_pretty_format方法失败: {e}")
+            
+            # 方法2: 尝试使用render方法，但传入适当的参数
+            if not detailed_structure and hasattr(parse_tree, 'render'):
+                try:
+                    # 一些SQLFluff版本的render方法支持format参数
+                    detailed_structure = parse_tree.render(format='tree')
+                    self.logger.debug("使用render(format='tree')方法获取解析树")
+                except Exception as e:
+                    try:
+                        detailed_structure = parse_tree.render()
+                        self.logger.debug("使用render()方法获取解析树")
+                    except Exception as e2:
+                        self.logger.debug(f"render方法失败: {e}, {e2}")
+            
+            # 方法3: 尝试访问内部的tree属性或方法
+            if not detailed_structure:
+                try:
+                    # 尝试访问可能的内部属性
+                    if hasattr(parse_tree, '_tree_repr'):
+                        detailed_structure = parse_tree._tree_repr()
+                    elif hasattr(parse_tree, 'tree'):
+                        if callable(parse_tree.tree):
+                            detailed_structure = parse_tree.tree()
+                        else:
+                            detailed_structure = str(parse_tree.tree)
+                    self.logger.debug("使用内部树表示方法获取解析树")
+                except Exception as e:
+                    self.logger.debug(f"内部方法失败: {e}")
+            
+            # 方法4: 使用自定义的递归格式化
+            if not detailed_structure:
+                try:
+                    detailed_structure = self._format_parse_tree_recursive(parse_tree, 0)
+                    self.logger.debug("使用自定义递归方法获取解析树")
+                except Exception as e:
+                    self.logger.debug(f"自定义递归方法失败: {e}")
+                    detailed_structure = str(parse_tree)
+            
+            return detailed_structure if detailed_structure else str(parse_tree)
+            
+        except Exception as e:
+            self.logger.debug(f"生成详细解析树结构失败: {e}")
+            return f"解析树结构生成失败: {str(e)}"
+    
+    def _format_parse_tree_recursive(self, segment, level: int = 0) -> str:
+        """
+        递归格式化解析树，精确模拟SQLFluff日志输出格式
+        
+        Args:
+            segment: 解析树段
+            level: 缩进级别
+            
+        Returns:
+            str: 格式化的解析树字符串
+        """
+        lines = []
+        indent = "    " * level
+        
+        try:
+            # 获取位置信息
+            pos_info = ""
+            if hasattr(segment, 'pos_marker') and segment.pos_marker:
+                try:
+                    line_no = getattr(segment.pos_marker, 'line_no', 1)
+                    line_pos = getattr(segment.pos_marker, 'line_pos', 1) 
+                    pos_info = f"[L: {line_no:3d}, P: {line_pos:3d}]"
+                except:
+                    pos_info = "[L:  ?, P:  ?]"
+            
+            # 获取段类型名称，保持下划线格式
+            segment_type = segment.__class__.__name__
+            # 转换CamelCase到snake_case
+            import re
+            segment_type = re.sub(r'([A-Z])', r'_\1', segment_type).lower().strip('_')
+            segment_type = segment_type.replace('_segment', '')
+            
+            # 特殊类型名称映射
+            type_mappings = {
+                'file': 'file',
+                'statement': 'statement', 
+                'delete_statement': 'delete_statement',
+                'from_clause': 'from_clause',
+                'from_expression': 'from_expression',
+                'from_expression_element': 'from_expression_element',
+                'table_expression': 'table_expression',
+                'table_reference': 'table_reference',
+                'alias_expression': 'alias_expression',
+                'keyword': 'keyword',
+                'whitespace': 'whitespace',
+                'identifier': 'naked_identifier',  # SQLFluff常用naked_identifier
+                'unparsable': 'unparsable',
+                'word': 'word',
+                'equals': 'equals',
+                'numeric_literal': 'numeric_literal',
+                'semicolon': 'semicolon',
+                'end_of_file': '[META] end_of_file'
+            }
+            
+            final_segment_type = type_mappings.get(segment_type, segment_type)
+            
+            # 判断是否是叶子节点（只有叶子节点显示原始内容）
+            is_leaf = not (hasattr(segment, 'segments') and segment.segments)
+            
+            # 获取原始内容（只在叶子节点显示）
+            raw_content = ""
+            if is_leaf and hasattr(segment, 'raw') and segment.raw is not None:
+                raw_content = repr(segment.raw)  # 使用repr保留引号
+            
+            # 特殊处理unparsable段
+            if 'unparsable' in segment.__class__.__name__.lower():
+                raw_content = "!! Expected: 'Nothing else in FileSegment.'"
+            
+            # 构建行内容
+            line_content = f"{pos_info}      |{indent}{final_segment_type}:"
+            if raw_content:
+                spaces_needed = max(1, 50 - len(f"{indent}{final_segment_type}:"))
+                line_content += " " * spaces_needed + raw_content
+                
+            lines.append(line_content)
+            
+            # 递归处理子段
+            if hasattr(segment, 'segments') and segment.segments:
+                for child_segment in segment.segments:
+                    # 处理META段
+                    if hasattr(child_segment, '__class__') and 'meta' in child_segment.__class__.__name__.lower():
+                        meta_type = child_segment.__class__.__name__.replace('Segment', '').lower()
+                        meta_pos = ""
+                        if hasattr(child_segment, 'pos_marker') and child_segment.pos_marker:
+                            try:
+                                line_no = getattr(child_segment.pos_marker, 'line_no', 1)
+                                line_pos = getattr(child_segment.pos_marker, 'line_pos', 1)
+                                meta_pos = f"[L: {line_no:3d}, P: {line_pos:3d}]"
+                            except:
+                                meta_pos = "[L:  ?, P:  ?]"
+                        lines.append(f"{meta_pos}      |{indent}    [META] {meta_type}:")
+                    else:
+                        # 递归处理普通段
+                        child_lines = self._format_parse_tree_recursive(child_segment, level + 1)
+                        if child_lines.strip():
+                            lines.append(child_lines)
+            
+        except Exception as e:
+            lines.append(f"{indent}Error formatting segment: {str(e)}")
+        
+        return '\n'.join(lines)

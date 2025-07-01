@@ -222,8 +222,33 @@ def _configure_exception_handlers(app: FastAPI):
         """请求验证异常处理器"""
         request_id = getattr(request.state, 'request_id', 'unknown')
         
+        # 转换错误为可序列化的格式
+        serializable_errors = []
+        for error in exc.errors():
+            serializable_error = {
+                "type": error.get("type", "unknown"),
+                "loc": error.get("loc", []),
+                "msg": str(error.get("msg", "")),
+                "input": str(error.get("input", "")) if error.get("input") is not None else None
+            }
+            # 如果有context，也转换为字符串
+            if "ctx" in error:
+                ctx = error["ctx"]
+                if isinstance(ctx, dict):
+                    serializable_ctx = {}
+                    for k, v in ctx.items():
+                        if isinstance(v, Exception):
+                            serializable_ctx[k] = str(v)
+                        else:
+                            serializable_ctx[k] = str(v)
+                    serializable_error["ctx"] = serializable_ctx
+                else:
+                    serializable_error["ctx"] = str(ctx)
+            
+            serializable_errors.append(serializable_error)
+        
         api_logger.warning(
-            f"请求验证失败: {exc.errors()}",
+            f"请求验证失败: {[str(e) for e in exc.errors()]}",
             extra={"request_id": request_id}
         )
         
@@ -231,7 +256,7 @@ def _configure_exception_handlers(app: FastAPI):
             status_code=422,
             content={
                 "detail": "请求参数验证失败",
-                "errors": exc.errors(),
+                "errors": serializable_errors,
                 "request_id": request_id
             }
         )

@@ -81,6 +81,7 @@ class TaskResultContent(BaseModel):
     summary: Dict[str, Any] = Field(description="分析摘要")
     file_info: Dict[str, Any] = Field(description="文件信息")
     analysis_metadata: Dict[str, Any] = Field(description="分析元数据")
+    parse_tree: Optional[Dict[str, Any]] = Field(default=None, description="SQLFluff解析树，显示SQL语句的语法结构")
     
     class Config:
         schema_extra = {
@@ -109,6 +110,20 @@ class TaskResultContent(BaseModel):
                     "sqlfluff_version": "2.3.5",
                     "dialect": "mysql",
                     "analysis_time": "2025-06-27T09:30:15.654321"
+                },
+                "parse_tree": {
+                    "description": "SQLFluff解析树，显示SQL语句的语法结构",
+                    "tree_structure": {
+                        "file": {
+                            "statement": {
+                                "select_statement": {
+                                    "select_clause": "...",
+                                    "from_clause": "..."
+                                }
+                            }
+                        }
+                    },
+                    "note": "此解析树对应日志中的'Fixed Tree'输出，有助于理解SQL语句的语法结构和调试语法问题"
                 }
             }
         }

@@ -80,12 +80,23 @@ class JobCreateRequest(BaseModel):
             v = v.strip().lower()
             if not v:
                 raise ValueError("方言不能为空")
-            # 常见的SQLFluff支持的方言
-            supported_dialects = {
-                'ansi', 'mysql', 'postgres', 'postgresql', 'sqlite', 'bigquery', 
-                'snowflake', 'redshift', 'oracle', 'tsql', 'hive', 'spark',
-                'teradata', 'exasol', 'db2', 'duckdb'
-            }
+            
+            # 动态获取SQLFluff支持的方言列表
+            try:
+                from app.services.sqlfluff_service import SQLFluffService
+                service = SQLFluffService()
+                supported_dialects = set(service.get_supported_dialects())
+            except Exception:
+                # 如果动态获取失败，使用常见的方言作为fallback
+                supported_dialects = {
+                    'ansi', 'mysql', 'postgres', 'postgresql', 'sqlite', 'bigquery', 
+                    'snowflake', 'redshift', 'oracle', 'tsql', 'hive', 'spark',
+                    'teradata', 'exasol', 'db2', 'duckdb', 'gbase8a', 'mariadb',
+                    'clickhouse', 'databricks', 'athena', 'duckdb', 'greenplum',
+                    'materializ', 'impala', 'soql', 'sparksql', 'starrocks', 
+                    'trino', 'vertica'
+                }
+            
             if v not in supported_dialects:
                 raise ValueError(f"不支持的方言: {v}，支持的方言包括: {', '.join(sorted(supported_dialects))}")
         return v

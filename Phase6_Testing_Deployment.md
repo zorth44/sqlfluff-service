@@ -431,7 +431,418 @@ def start_metrics_server(port: int = 8001):
     start_http_server(port)
 ```
 
-2. 配置结构化日志：
+2. **Celery Worker监控API**：
+
+```python
+# app/api/routes/monitoring.py - Worker监控接口
+from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Dict, Any, List
+from datetime import datetime
+import redis
+import psutil
+import os
+
+from app.celery_app.celery_main import celery_app
+from app.core.logging import api_logger
+from app.config.settings import get_settings
+
+router = APIRouter()
+settings = get_settings()
+
+@router.get("/monitoring/workers")
+async def get_worker_status():
+    """
+    获取所有Worker的状态信息
+    
+    返回活跃Worker列表、状态和性能信息
+    """
+    try:
+        # 使用Celery inspect获取Worker信息
+        inspect = celery_app.control.inspect()
+        
+        # 获取活跃Worker列表
+        active_workers = inspect.active()
+        registered_tasks = inspect.registered()
+        worker_stats = inspect.stats()
+        
+        # 组装Worker信息
+        workers_info = []
+        
+        if active_workers:
+            for worker_name, tasks in active_workers.items():
+                worker_info = {
+                    "worker_name": worker_name,
+                    "status": "online",
+                    "active_tasks": len(tasks),
+                    "current_tasks": [
+                        {
+                            "task_id": task["id"],
+                            "task_name": task["name"],
+                            "args": task.get("args", []),
+                            "kwargs": task.get("kwargs", {}),
+                            "time_start": task.get("time_start")
+                        }
+                        for task in tasks
+                    ]
+                }
+                
+                # 添加Worker统计信息
+                if worker_stats and worker_name in worker_stats:
+                    stats = worker_stats[worker_name]
+                    worker_info.update({
+                        "total_tasks": stats.get("total", 0),
+                        "pool_implementation": stats.get("pool", {}).get("implementation"),
+                        "pool_processes": stats.get("pool", {}).get("processes"),
+                        "rusage": stats.get("rusage", {})
+                    })
+                
+                # 添加注册任务信息
+                if registered_tasks and worker_name in registered_tasks:
+                    worker_info["registered_tasks"] = registered_tasks[worker_name]
+                
+                workers_info.append(worker_info)
+        
+        # 获取队列信息
+        queue_info = await get_queue_info()
+        
+        response = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "total_workers": len(workers_info),
+            "online_workers": len([w for w in workers_info if w["status"] == "online"]),
+            "workers": workers_info,
+            "queues": queue_info
+        }
+        
+        api_logger.debug(f"Worker状态查询成功: {len(workers_info)}个Worker在线")
+        return response
+        
+    except Exception as e:
+        api_logger.error(f"获取Worker状态失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取Worker状态失败: {str(e)}"
+        )
+
+@router.get("/monitoring/queues")
+async def get_queue_status():
+    """
+    获取Celery队列状态信息
+    
+    返回各个队列的任务数量和状态
+    """
+    try:
+        queue_info = await get_queue_info()
+        
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "queues": queue_info
+        }
+        
+    except Exception as e:
+        api_logger.error(f"获取队列状态失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取队列状态失败: {str(e)}"
+        )
+
+@router.get("/monitoring/workers/{worker_id}")
+async def get_worker_detail(worker_id: str):
+    """
+    获取指定Worker的详细信息
+    
+    包括当前任务、资源使用情况等
+    """
+    try:
+        inspect = celery_app.control.inspect([worker_id])
+        
+        # 获取Worker详细信息
+        active_tasks = inspect.active()
+        scheduled_tasks = inspect.scheduled()
+        reserved_tasks = inspect.reserved()
+        worker_stats = inspect.stats()
+        
+        if not active_tasks or worker_id not in active_tasks:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Worker {worker_id} 不存在或不在线"
+            )
+        
+        worker_detail = {
+            "worker_id": worker_id,
+            "timestamp": datetime.utcnow().isoformat(),
+            "status": "online",
+            "active_tasks": active_tasks.get(worker_id, []),
+            "scheduled_tasks": scheduled_tasks.get(worker_id, []),
+            "reserved_tasks": reserved_tasks.get(worker_id, []),
+            "stats": worker_stats.get(worker_id, {}) if worker_stats else {}
+        }
+        
+        return worker_detail
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"获取Worker详情失败: {worker_id}, 错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取Worker详情失败: {str(e)}"
+        )
+
+@router.post("/monitoring/workers/{worker_id}/control")
+async def control_worker(worker_id: str, action: str):
+    """
+    控制Worker操作
+    
+    支持的操作：shutdown, pool_restart, reset_stats
+    """
+    try:
+        control = celery_app.control
+        
+        if action == "shutdown":
+            # 优雅关闭Worker
+            response = control.broadcast('shutdown', destination=[worker_id])
+        elif action == "pool_restart":
+            # 重启Worker进程池
+            response = control.broadcast('pool_restart', destination=[worker_id])
+        elif action == "reset_stats":
+            # 重置Worker统计信息
+            inspect = celery_app.control.inspect([worker_id])
+            response = inspect.memdump()
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"不支持的操作: {action}"
+            )
+        
+        return {
+            "worker_id": worker_id,
+            "action": action,
+            "timestamp": datetime.utcnow().isoformat(),
+            "result": response
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"控制Worker失败: {worker_id}, 操作: {action}, 错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"控制Worker失败: {str(e)}"
+        )
+
+async def get_queue_info() -> List[Dict[str, Any]]:
+    """获取队列信息"""
+    try:
+        # 连接Redis获取队列信息
+        redis_client = redis.Redis.from_url(settings.CELERY_BROKER_URL)
+        
+        queues = [
+            "celery",           # 默认队列
+            "zip_processing",   # ZIP处理队列
+            "sql_analysis"      # SQL分析队列
+        ]
+        
+        queue_info = []
+        for queue_name in queues:
+            # 获取队列长度
+            queue_length = redis_client.llen(queue_name)
+            
+            queue_info.append({
+                "name": queue_name,
+                "length": queue_length,
+                "status": "active" if queue_length >= 0 else "inactive"
+            })
+        
+        return queue_info
+        
+    except Exception as e:
+        api_logger.error(f"获取队列信息失败: {e}")
+        return []
+
+@router.get("/monitoring/system")
+async def get_system_metrics():
+    """
+    获取系统资源使用情况
+    
+    返回CPU、内存、磁盘等资源使用情况
+    """
+    try:
+        # CPU使用率
+        cpu_percent = psutil.cpu_percent(interval=1)
+        cpu_count = psutil.cpu_count()
+        
+        # 内存使用情况
+        memory = psutil.virtual_memory()
+        
+        # 磁盘使用情况
+        disk_usage = psutil.disk_usage('/')
+        
+        # NFS存储使用情况
+        nfs_usage = None
+        if os.path.exists(settings.NFS_SHARE_ROOT_PATH):
+            nfs_usage = psutil.disk_usage(settings.NFS_SHARE_ROOT_PATH)
+        
+        # 网络统计
+        network_io = psutil.net_io_counters()
+        
+        # 进程信息
+        current_process = psutil.Process()
+        process_info = {
+            "pid": current_process.pid,
+            "cpu_percent": current_process.cpu_percent(),
+            "memory_info": current_process.memory_info()._asdict(),
+            "create_time": current_process.create_time()
+        }
+        
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "cpu": {
+                "usage_percent": cpu_percent,
+                "core_count": cpu_count
+            },
+            "memory": {
+                "total": memory.total,
+                "available": memory.available,
+                "used": memory.used,
+                "usage_percent": memory.percent
+            },
+            "disk": {
+                "total": disk_usage.total,
+                "used": disk_usage.used,
+                "free": disk_usage.free,
+                "usage_percent": (disk_usage.used / disk_usage.total) * 100
+            },
+            "nfs_storage": {
+                "total": nfs_usage.total if nfs_usage else 0,
+                "used": nfs_usage.used if nfs_usage else 0,
+                "free": nfs_usage.free if nfs_usage else 0,
+                "usage_percent": (nfs_usage.used / nfs_usage.total) * 100 if nfs_usage else 0
+            } if nfs_usage else None,
+            "network": {
+                "bytes_sent": network_io.bytes_sent,
+                "bytes_recv": network_io.bytes_recv,
+                "packets_sent": network_io.packets_sent,
+                "packets_recv": network_io.packets_recv
+            },
+            "process": process_info
+        }
+        
+    except Exception as e:
+        api_logger.error(f"获取系统指标失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取系统指标失败: {str(e)}"
+        )
+```
+
+3. **Worker健康检查增强**：
+
+```python
+# app/api/routes/health.py - 增强Worker健康检查
+@router.get("/health/workers")
+async def workers_health_check():
+    """
+    Worker服务健康检查
+    
+    检查Worker服务的可用性和健康状态
+    """
+    try:
+        health_status = {
+            "status": "healthy",
+            "timestamp": datetime.utcnow().isoformat(),
+            "service": "celery-workers",
+            "checks": {}
+        }
+        
+        # 检查Celery连接
+        try:
+            inspect = celery_app.control.inspect()
+            active_workers = inspect.active()
+            
+            if active_workers:
+                worker_count = len(active_workers)
+                health_status["checks"]["celery_workers"] = {
+                    "status": "healthy",
+                    "message": f"{worker_count}个Worker在线",
+                    "worker_count": worker_count,
+                    "workers": list(active_workers.keys())
+                }
+            else:
+                health_status["checks"]["celery_workers"] = {
+                    "status": "unhealthy",
+                    "message": "没有可用的Worker",
+                    "worker_count": 0
+                }
+                health_status["status"] = "unhealthy"
+                
+        except Exception as e:
+            health_status["checks"]["celery_workers"] = {
+                "status": "unhealthy",
+                "message": f"Celery连接失败: {str(e)}"
+            }
+            health_status["status"] = "unhealthy"
+        
+        # 检查消息队列
+        try:
+            redis_client = redis.Redis.from_url(settings.CELERY_BROKER_URL)
+            redis_client.ping()
+            
+            # 检查队列长度
+            queue_lengths = {}
+            for queue_name in ["celery", "zip_processing", "sql_analysis"]:
+                queue_lengths[queue_name] = redis_client.llen(queue_name)
+            
+            health_status["checks"]["message_queues"] = {
+                "status": "healthy",
+                "message": "消息队列正常",
+                "queue_lengths": queue_lengths
+            }
+            
+        except Exception as e:
+            health_status["checks"]["message_queues"] = {
+                "status": "unhealthy",
+                "message": f"消息队列连接失败: {str(e)}"
+            }
+            health_status["status"] = "unhealthy"
+        
+        # 检查任务处理能力
+        try:
+            # 可以发送一个测试任务来验证处理能力
+            from app.celery_app.tasks import celery_app
+            
+            # 获取任务统计
+            inspect = celery_app.control.inspect()
+            stats = inspect.stats()
+            
+            total_processed = 0
+            if stats:
+                for worker_stats in stats.values():
+                    total_processed += worker_stats.get('total', 0)
+            
+            health_status["checks"]["task_processing"] = {
+                "status": "healthy",
+                "message": "任务处理能力正常",
+                "total_tasks_processed": total_processed
+            }
+            
+        except Exception as e:
+            health_status["checks"]["task_processing"] = {
+                "status": "warning",
+                "message": f"任务处理能力检查失败: {str(e)}"
+            }
+        
+        return health_status
+        
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "timestamp": datetime.utcnow().isoformat(),
+            "service": "celery-workers",
+            "error": str(e)
+        }
+```
+
+4. 配置结构化日志：
 
 ```python
 # app/core/logging.py - 增强日志配置
@@ -492,65 +903,175 @@ def setup_logging():
         root_logger.addHandler(file_handler)
 ```
 
-3. 健康检查增强：
+5. **在FastAPI主应用中注册监控路由**：
 
 ```python
-# app/api/routes/health.py - 增强健康检查
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from app.core.database import get_db
-from app.core.config import settings
-import redis
-import os
+# app/web_main.py - 注册监控路由
+from app.api.routes import jobs, tasks, health, monitoring
 
-router = APIRouter()
-
-@router.get("/health")
-async def health_check(db: Session = Depends(get_db)):
-    """完整的健康检查"""
-    health_status = {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "version": "1.0.0",
-        "checks": {}
-    }
-    
-    # 数据库检查
-    try:
-        db.execute("SELECT 1")
-        health_status["checks"]["database"] = {"status": "healthy"}
-    except Exception as e:
-        health_status["checks"]["database"] = {"status": "unhealthy", "error": str(e)}
-        health_status["status"] = "unhealthy"
-    
-    # Redis检查
-    try:
-        redis_client = redis.Redis.from_url(settings.CELERY_BROKER_URL)
-        redis_client.ping()
-        health_status["checks"]["redis"] = {"status": "healthy"}
-    except Exception as e:
-        health_status["checks"]["redis"] = {"status": "unhealthy", "error": str(e)}
-        health_status["status"] = "unhealthy"
-    
-    # NFS检查
-    try:
-        if os.path.exists(settings.NFS_SHARE_ROOT_PATH) and os.access(settings.NFS_SHARE_ROOT_PATH, os.W_OK):
-            health_status["checks"]["nfs"] = {"status": "healthy"}
-        else:
-            health_status["checks"]["nfs"] = {"status": "unhealthy", "error": "NFS not accessible"}
-            health_status["status"] = "unhealthy"
-    except Exception as e:
-        health_status["checks"]["nfs"] = {"status": "unhealthy", "error": str(e)}
-        health_status["status"] = "unhealthy"
-    
-    return health_status
+app.include_router(jobs.router, prefix="/api/v1", tags=["jobs"])
+app.include_router(tasks.router, prefix="/api/v1", tags=["tasks"])
+app.include_router(health.router, prefix="/api/v1", tags=["health"])
+app.include_router(monitoring.router, prefix="/api/v1", tags=["monitoring"])
 ```
 
 **验收标准**：
 - Prometheus监控指标正常收集
+- Worker监控API可以获取实时Worker状态
+- 队列监控API可以查看任务队列情况
+- Worker健康检查覆盖所有关键功能
 - 日志格式统一，便于聚合和分析
-- 健康检查覆盖所有关键依赖
 - 监控指标可以用于告警和可视化
+
+### 6. **监控仪表板配置**：
+
+```python
+# monitoring_dashboard.py - 简单的监控仪表板
+import asyncio
+import aiohttp
+import json
+from datetime import datetime
+import time
+
+class WorkerMonitoringDashboard:
+    def __init__(self, base_url="http://localhost:8000"):
+        self.base_url = base_url
+    
+    async def get_worker_status(self):
+        """获取Worker状态"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{self.base_url}/api/v1/monitoring/workers") as response:
+                return await response.json()
+    
+    async def get_system_metrics(self):
+        """获取系统指标"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{self.base_url}/api/v1/monitoring/system") as response:
+                return await response.json()
+    
+    async def get_health_status(self):
+        """获取健康状态"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{self.base_url}/api/v1/health/workers") as response:
+                return await response.json()
+    
+    def print_dashboard(self, worker_status, system_metrics, health_status):
+        """打印仪表板"""
+        print("\n" + "="*60)
+        print(f"SQL Linting Service - Worker Dashboard")
+        print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("="*60)
+        
+        # Worker状态
+        print(f"\n📊 Worker Status:")
+        print(f"  Total Workers: {worker_status.get('total_workers', 0)}")
+        print(f"  Online Workers: {worker_status.get('online_workers', 0)}")
+        
+        for worker in worker_status.get('workers', []):
+            print(f"  • {worker['worker_name']}: {worker['active_tasks']} active tasks")
+        
+        # 队列状态
+        print(f"\n📦 Queue Status:")
+        for queue in worker_status.get('queues', []):
+            print(f"  • {queue['name']}: {queue['length']} tasks ({queue['status']})")
+        
+        # 系统资源
+        print(f"\n💻 System Resources:")
+        cpu = system_metrics.get('cpu', {})
+        memory = system_metrics.get('memory', {})
+        print(f"  CPU: {cpu.get('usage_percent', 0):.1f}% ({cpu.get('core_count', 0)} cores)")
+        print(f"  Memory: {memory.get('usage_percent', 0):.1f}% ({memory.get('used', 0)//1048576}MB used)")
+        
+        # 健康状态
+        print(f"\n🏥 Health Status:")
+        overall_status = health_status.get('status', 'unknown')
+        print(f"  Overall: {overall_status.upper()}")
+        
+        for check_name, check_info in health_status.get('checks', {}).items():
+            status = check_info.get('status', 'unknown')
+            message = check_info.get('message', '')
+            print(f"  • {check_name}: {status.upper()} - {message}")
+        
+        print("="*60)
+    
+    async def run_dashboard(self, refresh_interval=30):
+        """运行仪表板"""
+        while True:
+            try:
+                # 获取所有监控数据
+                worker_status = await self.get_worker_status()
+                system_metrics = await self.get_system_metrics()
+                health_status = await self.get_health_status()
+                
+                # 清屏并打印仪表板
+                import os
+                os.system('clear' if os.name == 'posix' else 'cls')
+                self.print_dashboard(worker_status, system_metrics, health_status)
+                
+                # 等待刷新间隔
+                await asyncio.sleep(refresh_interval)
+                
+            except Exception as e:
+                print(f"Error updating dashboard: {e}")
+                await asyncio.sleep(refresh_interval)
+
+# 使用示例
+async def main():
+    dashboard = WorkerMonitoringDashboard()
+    await dashboard.run_dashboard(refresh_interval=10)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+使用方法：
+```bash
+# 启动监控仪表板
+python monitoring_dashboard.py
+```
+
+### 7. **Grafana集成配置**：
+
+```yaml
+# grafana-dashboard.json - Grafana仪表板配置
+{
+  "dashboard": {
+    "title": "SQL Linting Service - Worker Monitoring",
+    "panels": [
+      {
+        "title": "Worker Status",
+        "type": "stat",
+        "targets": [
+          {
+            "url": "http://localhost:8000/api/v1/monitoring/workers",
+            "jsonPath": "$.online_workers"
+          }
+        ]
+      },
+      {
+        "title": "Queue Length",
+        "type": "graph",
+        "targets": [
+          {
+            "url": "http://localhost:8000/api/v1/monitoring/queues",
+            "jsonPath": "$.queues[*].length"
+          }
+        ]
+      },
+      {
+        "title": "System Resources",
+        "type": "graph",
+        "targets": [
+          {
+            "url": "http://localhost:8000/api/v1/monitoring/system",
+            "jsonPath": "$.cpu.usage_percent"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
 
 ### 任务6.4：部署文档和运维指南
 **目标**：编写完整的部署文档和运维指南
@@ -611,14 +1132,112 @@ alembic upgrade head
 - 错误率
 - 资源使用情况
 
+### Worker监控API
+系统提供了完整的Worker监控API，用于实时监控Celery Worker的状态和性能：
+
+#### 1. 获取所有Worker状态
+```bash
+curl http://localhost:8000/api/v1/monitoring/workers
+```
+
+响应示例：
+```json
+{
+  "timestamp": "2025-01-27T10:30:00.123456",
+  "total_workers": 2,
+  "online_workers": 2,
+  "workers": [
+    {
+      "worker_name": "worker@server1",
+      "status": "online",
+      "active_tasks": 3,
+      "total_tasks": 150,
+      "pool_processes": 4,
+      "current_tasks": [
+        {
+          "task_id": "abc123",
+          "task_name": "app.celery_app.tasks.process_sql_file",
+          "time_start": 1640000000.0
+        }
+      ]
+    }
+  ],
+  "queues": [
+    {
+      "name": "sql_analysis",
+      "length": 5,
+      "status": "active"
+    }
+  ]
+}
+```
+
+#### 2. 获取特定Worker详情
+```bash
+curl http://localhost:8000/api/v1/monitoring/workers/worker@server1
+```
+
+#### 3. 获取队列状态
+```bash
+curl http://localhost:8000/api/v1/monitoring/queues
+```
+
+#### 4. 获取系统资源使用情况
+```bash
+curl http://localhost:8000/api/v1/monitoring/system
+```
+
+响应示例：
+```json
+{
+  "timestamp": "2025-01-27T10:30:00.123456",
+  "cpu": {
+    "usage_percent": 45.2,
+    "core_count": 8
+  },
+  "memory": {
+    "total": 8589934592,
+    "available": 4294967296,
+    "used": 4294967296,
+    "usage_percent": 50.0
+  },
+  "nfs_storage": {
+    "total": 1073741824000,
+    "used": 536870912000,
+    "free": 536870912000,
+    "usage_percent": 50.0
+  }
+}
+```
+
+#### 5. Worker健康检查
+```bash
+curl http://localhost:8000/api/v1/health/workers
+```
+
+### 告警设置建议
+基于监控API数据，建议设置以下告警规则：
+
+1. **Worker离线告警**：
+   - 条件：online_workers < 1
+   - 严重程度：Critical
+
+2. **队列积压告警**：
+   - 条件：队列长度 > 100
+   - 严重程度：Warning
+
+3. **系统资源告警**：
+   - CPU使用率 > 80%：Warning
+   - 内存使用率 > 85%：Warning
+   - 磁盘使用率 > 90%：Critical
+
+4. **任务处理异常告警**：
+   - 任务失败率 > 10%：Warning
+   - 任务平均处理时间 > 5分钟：Warning
+
 ### 日志位置
 - Web服务日志: `/var/log/sqlfluff/web.log`
 - Worker日志: `/var/log/sqlfluff/worker.log`
-
-### 常见问题
-1. **数据库连接失败**: 检查数据库配置和网络连通性
-2. **NFS挂载问题**: 确认NFS路径和权限
-3. **任务处理缓慢**: 调整Worker并发数
 ```
 
 2. 创建故障排查文档：
@@ -644,13 +1263,95 @@ alembic upgrade head
 3. 检查SQL文件是否存在
 4. 检查SQLFluff配置
 
-### 3. 性能问题
+### 3. Worker监控相关问题
+**症状**: Worker监控API返回异常或Worker状态不正确
+**排查步骤**:
+1. 使用监控API检查Worker状态：
+   ```bash
+   curl http://localhost:8000/api/v1/monitoring/workers
+   ```
+2. 检查Worker进程是否正在运行：
+   ```bash
+   ps aux | grep celery
+   ```
+3. 检查Worker日志：
+   ```bash
+   tail -f /var/log/sqlfluff/worker.log
+   ```
+4. 检查消息队列状态：
+   ```bash
+   curl http://localhost:8000/api/v1/monitoring/queues
+   ```
+5. 验证Redis连接：
+   ```bash
+   redis-cli -u $CELERY_BROKER_URL ping
+   ```
+
+### 4. 队列积压问题
+**症状**: 任务长时间排队，处理缓慢
+**排查步骤**:
+1. 检查队列长度：
+   ```bash
+   curl http://localhost:8000/api/v1/monitoring/queues
+   ```
+2. 检查Worker并发设置：
+   ```bash
+   # 调整Worker并发数
+   export CELERY_WORKER_CONCURRENCY=8
+   ```
+3. 增加Worker实例：
+   ```bash
+   # 启动额外的Worker
+   ./scripts/start_worker.sh &
+   ```
+4. 检查系统资源使用：
+   ```bash
+   curl http://localhost:8000/api/v1/monitoring/system
+   ```
+
+### 5. Worker性能问题
+**症状**: Worker CPU或内存使用率过高
+**排查步骤**:
+1. 监控系统资源：
+   ```bash
+   curl http://localhost:8000/api/v1/monitoring/system
+   ```
+2. 检查单个Worker的任务负载：
+   ```bash
+   curl http://localhost:8000/api/v1/monitoring/workers/worker@hostname
+   ```
+3. 调整Worker配置：
+   ```bash
+   # 降低并发数
+   export CELERY_WORKER_CONCURRENCY=2
+   # 增加任务重启频率
+   export CELERY_WORKER_MAX_TASKS_PER_CHILD=500
+   ```
+4. 检查是否有长时间运行的任务：
+   - 查看active_tasks中的time_start时间戳
+   - 考虑设置任务超时时间
+
+### 6. Worker健康检查失败
+**症状**: Worker健康检查接口返回unhealthy状态
+**排查步骤**:
+1. 检查Worker健康状态：
+   ```bash
+   curl http://localhost:8000/api/v1/health/workers
+   ```
+2. 根据返回的checks信息定位具体问题：
+   - `celery_workers`: Worker连接问题
+   - `message_queues`: Redis队列问题
+   - `task_processing`: 任务处理能力问题
+3. 重启相应的服务或组件
+
+### 7. 性能问题
 **症状**: 请求响应慢或任务处理缓慢
 **排查步骤**:
 1. 检查系统资源使用情况
 2. 检查数据库性能
 3. 调整Worker并发数
 4. 检查NFS性能
+5. 使用监控API持续观察性能指标
 ```
 
 **验收标准**：
