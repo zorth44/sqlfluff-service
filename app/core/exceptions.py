@@ -29,7 +29,7 @@ class ErrorCode(Enum):
     DATABASE_CONFIG_ERROR = (2001, "数据库配置错误")
     REDIS_CONFIG_ERROR = (2002, "Redis配置错误")
     NFS_CONFIG_ERROR = (2003, "NFS配置错误")
-    CONSUL_CONFIG_ERROR = (2004, "Consul配置错误")
+    # CONSUL_CONFIG_ERROR = (2004, "Consul配置错误")  # 已移除
     
     # ============= 数据库错误 (2100-2199) =============
     DATABASE_CONNECTION_ERROR = (2100, "数据库连接失败")

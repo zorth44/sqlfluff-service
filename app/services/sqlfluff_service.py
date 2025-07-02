@@ -184,9 +184,81 @@ class SQLFluffService:
                 raise
             raise SQLFluffException("分析SQL文件", file_path, str(e))
     
+    def analyze_sql_content_with_rules(
+        self, 
+        sql_content: str, 
+        file_name: str = "query.sql", 
+        dialect: Optional[str] = None,
+        rules: Optional[List[str]] = None,
+        exclude_rules: Optional[List[str]] = None,
+        config_overrides: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        分析SQL内容，支持动态规则配置
+        
+        Args:
+            sql_content: SQL内容
+            file_name: 文件名（用于结果中显示）
+            dialect: SQL方言，如果为None则使用默认方言
+            rules: 启用的规则列表，如["L001", "L032", "LT01"]
+            exclude_rules: 排除的规则列表，如["L016", "L034"]
+            config_overrides: 其他配置覆盖，如{"max_line_length": 120}
+            
+        Returns:
+            Dict[str, Any]: 分析结果
+        """
+        try:
+            used_dialect = dialect or self.default_dialect
+            
+            # 🔥 使用SQLFluff简单API进行动态配置
+            lint_result = None
+            
+            # 如果有额外的配置覆盖，使用FluffConfig
+            if config_overrides or rules or exclude_rules:
+                from sqlfluff.core import FluffConfig
+                
+                # 构建配置字典
+                configs = {
+                    "core": {
+                        "dialect": used_dialect,
+                        **(config_overrides or {})
+                    }
+                }
+                
+                # 如果有规则配置，也添加到配置中
+                if rules:
+                    configs["core"]["rules"] = rules
+                if exclude_rules:
+                    configs["core"]["exclude_rules"] = exclude_rules
+                    
+                config = FluffConfig(configs=configs)
+                lint_result = sqlfluff.lint(sql_content, config=config)
+            else:
+                # 使用默认配置
+                lint_result = sqlfluff.lint(sql_content, dialect=used_dialect)
+            
+            # 格式化结果（使用简单API格式化方法）
+            formatted_result = self._format_sqlfluff_simple_result(
+                lint_result, sql_content, file_name, used_dialect
+            )
+            
+            # 添加规则配置信息到结果中
+            formatted_result["analysis_metadata"].update({
+                "rules_enabled": rules if rules else "all",
+                "rules_excluded": exclude_rules if exclude_rules else "none",
+                "config_overrides": config_overrides if config_overrides else {}
+            })
+            
+            self.logger.debug(f"动态规则SQL分析完成: {file_name}, 方言: {used_dialect}, 规则: {rules}")
+            return formatted_result
+            
+        except Exception as e:
+            self.logger.error(f"动态规则SQL分析失败: {file_name}, 错误: {e}")
+            raise SQLFluffException("动态规则SQL分析", file_name, str(e))
+
     def analyze_sql_content(self, sql_content: str, file_name: str = "query.sql", dialect: Optional[str] = None) -> Dict[str, Any]:
         """
-        分析SQL内容字符串
+        分析SQL内容字符串（保持向后兼容）
         
         Args:
             sql_content: SQL内容
@@ -196,43 +268,37 @@ class SQLFluffService:
         Returns:
             Dict[str, Any]: 分析结果
         """
+        return self.analyze_sql_content_with_rules(sql_content, file_name, dialect)
+
+    def _original_analyze_sql_content(self, sql_content: str, file_name: str = "query.sql", dialect: Optional[str] = None) -> Dict[str, Any]:
+        """
+        原始的分析SQL内容方法（使用Linter）
+        """
         try:
             # 获取对应方言的Linter
             linter = self._get_linter(dialect)
             used_dialect = dialect or self.default_dialect
             
-            # 执行Linting
+            # 执行分析
             lint_result = linter.lint_string(sql_content)
             
-            # 获取解析树 - 优先从linter结果中获取，fallback到直接解析
+            # 尝试获取解析树
             parse_tree = None
-            parse_tree_info = None
-            
-            # 方法1: 尝试从linter内部获取解析树
             try:
-                # 重新解析以获取解析树，但保留错误信息
-                parsed_string = linter.parse_string(sql_content)
-                if parsed_string and parsed_string.tree:
-                    parse_tree_info = self._extract_parse_tree_info(parsed_string.tree)
-                    self.logger.debug(f"从linter成功获取解析树: {file_name}")
+                from sqlfluff import parse
+                parse_result = parse(sql_content, dialect=used_dialect)
+                if parse_result:
+                    parse_tree = parse_result
             except Exception as e:
-                self.logger.debug(f"从linter获取解析树失败: {file_name}, 错误: {e}")
-            
-            # 方法2: 如果方法1失败，尝试使用简单API（仅在无语法错误时有效）
-            if not parse_tree_info:
-                try:
-                    parse_tree = sqlfluff.parse(sql_content, dialect=used_dialect)
-                    # 统一转换为我们的详细格式
-                    parse_tree_info = self._extract_parse_tree_info(parse_tree)
-                    self.logger.debug(f"使用简单API成功获取解析树: {file_name}")
-                except Exception as e:
-                    self.logger.debug(f"简单API获取解析树失败: {file_name}, 错误: {e}")
+                self.logger.debug(f"获取解析树失败: {e}")
             
             # 格式化结果
-            formatted_result = self._format_lint_result(lint_result, sql_content, file_name, used_dialect, linter, parse_tree_info)
+            result = self._format_lint_result(
+                lint_result, sql_content, file_name, used_dialect, linter, parse_tree
+            )
             
             self.logger.debug(f"SQL内容分析完成: {file_name}, 方言: {used_dialect}")
-            return formatted_result
+            return result
             
         except Exception as e:
             self.logger.error(f"分析SQL内容失败: {file_name}, 方言: {dialect}, 错误: {e}")
@@ -785,3 +851,82 @@ class SQLFluffService:
             lines.append(f"{indent}Error formatting segment: {str(e)}")
         
         return '\n'.join(lines)
+
+    def _format_sqlfluff_simple_result(self, lint_result, sql_content: str, file_name: str, dialect: str) -> Dict[str, Any]:
+        """格式化SQLFluff简单API结果为标准JSON格式"""
+        try:
+            violations = []
+            critical_count = 0
+            warning_count = 0
+            
+            # SQLFluff简单API返回的是违规项字典列表
+            for violation in lint_result:
+                violation_dict = {
+                    "line_no": violation.get("line_no", 0),
+                    "line_pos": violation.get("line_pos", 0),
+                    "code": violation.get("code", "UNKNOWN"),
+                    "description": violation.get("description", "No description"),
+                    "rule": violation.get("code", "unknown"),
+                    "severity": self._get_violation_severity_from_code(violation.get("code", "")),
+                    "fixable": False  # 简单API不提供fixable信息
+                }
+                
+                violations.append(violation_dict)
+                
+                # 统计严重程度
+                if violation_dict["severity"] == "critical":
+                    critical_count += 1
+                else:
+                    warning_count += 1
+            
+            # 计算摘要
+            total_violations = len(violations)
+            file_passed = total_violations == 0
+            
+            # 获取文件基本信息
+            lines = sql_content.split('\n')
+            line_count = len(lines)
+            
+            # 构造结果
+            result = {
+                "violations": violations,
+                "summary": {
+                    "total_violations": total_violations,
+                    "critical_violations": critical_count,
+                    "warning_violations": warning_count,
+                    "file_passed": file_passed,
+                    "success_rate": 0 if total_violations > 0 else 100
+                },
+                "file_info": {
+                    "file_name": file_name,
+                    "file_size": len(sql_content.encode('utf-8')),
+                    "line_count": line_count,
+                    "character_count": len(sql_content)
+                },
+                "analysis_metadata": {
+                    "sqlfluff_version": sqlfluff.__version__,
+                    "dialect": dialect,
+                    "analysis_time": datetime.now().isoformat(),
+                    "api_type": "simple_api"
+                }
+            }
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"格式化SQLFluff结果失败: {e}")
+            raise SQLFluffException("格式化SQLFluff结果", file_name, str(e))
+
+    def _get_violation_severity_from_code(self, rule_code: str) -> str:
+        """根据规则代码判断严重程度"""
+        try:
+            # 关键错误（影响SQL执行）
+            critical_rules = ['L001', 'L002', 'L003', 'L008', 'L009', 'PRS01', 'TMP01']
+            if rule_code in critical_rules:
+                return "critical"
+            
+            # 默认为警告
+            return "warning"
+            
+        except Exception:
+            return "warning"

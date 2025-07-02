@@ -45,12 +45,12 @@ class Settings(BaseSettings):
         env="NFS_SHARE_ROOT_PATH"
     )
     
-    # ============= Consul服务发现配置 =============
-    CONSUL_HOST: str = Field(default="127.0.0.1", description="Consul Agent主机地址")
-    CONSUL_PORT: int = Field(default=8500, description="Consul Agent端口")
-    CONSUL_SERVICE_NAME: str = Field(default="sql-linting-service", description="服务名称")
-    CONSUL_SERVICE_PORT: int = Field(default=8000, description="服务端口")
-    CONSUL_HEALTH_CHECK_INTERVAL: str = Field(default="10s", description="健康检查间隔")
+    # ============= Consul服务发现配置 (已移除) =============
+    # CONSUL_HOST: str = Field(default="127.0.0.1", description="Consul Agent主机地址")
+    # CONSUL_PORT: int = Field(default=8500, description="Consul Agent端口")
+    # CONSUL_SERVICE_NAME: str = Field(default="sql-linting-service", description="服务名称")
+    # CONSUL_SERVICE_PORT: int = Field(default=8000, description="服务端口")
+    # CONSUL_HEALTH_CHECK_INTERVAL: str = Field(default="10s", description="健康检查间隔")
     
     # ============= 日志配置 =============
     LOG_LEVEL: str = Field(default="INFO", description="日志级别")
@@ -153,15 +153,15 @@ class Settings(BaseSettings):
         """是否为生产环境"""
         return self.ENVIRONMENT == 'prod'
     
-    def get_consul_config(self) -> Dict[str, Any]:
-        """获取Consul配置"""
-        return {
-            'host': self.CONSUL_HOST,
-            'port': self.CONSUL_PORT,
-            'service_name': self.CONSUL_SERVICE_NAME,
-            'service_port': self.CONSUL_SERVICE_PORT,
-            'health_check_interval': self.CONSUL_HEALTH_CHECK_INTERVAL
-        }
+    # def get_consul_config(self) -> Dict[str, Any]:
+    #     """获取Consul配置（已移除）"""
+    #     return {
+    #         'host': self.CONSUL_HOST,
+    #         'port': self.CONSUL_PORT,
+    #         'service_name': self.CONSUL_SERVICE_NAME,
+    #         'service_port': self.CONSUL_SERVICE_PORT,
+    #         'health_check_interval': self.CONSUL_HEALTH_CHECK_INTERVAL
+    #     }
     
     def get_celery_config(self) -> Dict[str, Any]:
         """获取Celery配置"""
@@ -203,8 +203,8 @@ def validate_production_config(settings: Settings) -> None:
         critical_configs = [
             'DATABASE_URL',
             'REDIS_HOST',
-            'NFS_SHARE_ROOT_PATH',
-            'CONSUL_HOST'
+            'NFS_SHARE_ROOT_PATH'
+            # 'CONSUL_HOST'  # 已移除
         ]
         
         for config_name in critical_configs:
