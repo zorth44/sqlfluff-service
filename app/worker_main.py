@@ -1,109 +1,129 @@
 """
-事件驱动Worker服务启动入口
+SQLFluff Worker主程序
 
-Worker完全脱离数据库依赖，通过Redis事件进行通信。
-基于统一的单文件处理模式，支持动态规则配置。
-
-负责：
-- 订阅SQL检查请求事件
-- 执行SQLFluff分析（支持动态规则）
-- 发布处理结果事件
-- 发布Worker状态监控事件
+统一事件驱动架构的Worker实现：
+- 事件监听：监听Redis事件
+- 任务处理：使用Celery执行SQLFluff分析
+- 监控能力：通过Flower监控面板实时查看状态
+- 企业级特性：支持可靠性、并发、监控等
 """
 
 import signal
 import sys
-import threading
+import os
 import time
-from app.celery_app import event_listener
-from app.event_handlers.monitoring_handler import MonitoringHandler
-from app.core.logging import setup_logging, service_logger
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from app.config.settings import Settings
+from app.core.logging import service_logger
+from app.event_handlers.sql_check_handler import SqlCheckHandler
 
-class EventDrivenWorker:
-    """事件驱动Worker服务"""
+# 获取配置
+settings = Settings()
+
+class SQLFluffWorker:
+    """SQLFluff Worker主类"""
     
     def __init__(self):
-        self.event_listener = event_listener
-        self.monitoring = MonitoringHandler()
+        self.logger = service_logger
+        self.sql_check_handler = SqlCheckHandler()
         self.running = False
-        self.monitoring_thread = None
+        self.thread_pool = None
         
-    def start(self):
-        """启动Worker"""
-        self.running = True
-        service_logger.info("Starting Event-Driven SQL Processing Worker...")
-        
-        # 启动监控心跳（在独立线程中运行）
-        self.monitoring_thread = threading.Thread(target=self._start_monitoring)
-        self.monitoring_thread.start()
+        # 生成Worker ID
+        self.worker_id = f"worker-{os.getenv('HOSTNAME', 'unknown')}-{os.getpid()}"
         
         # 设置信号处理
-        signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
-        
+        signal.signal(signal.SIGINT, self._signal_handler)
+    
+    def start(self):
+        """启动Worker"""
         try:
-            # 启动事件监听（这将阻塞主线程）
-            self.event_listener.listen_events()
-        except KeyboardInterrupt:
-            service_logger.info("Received interrupt signal")
-        finally:
-            self.stop()
+            self.logger.info("🚀 Starting SQLFluff Worker...")
+            self.logger.info(f"Worker ID: {self.worker_id}")
+            self.logger.info(f"Redis URL: {settings.CELERY_BROKER_URL}")
+            self.logger.info(f"Max concurrent tasks: {settings.MAX_CONCURRENT_TASKS}")
+            self.logger.info("📊 Monitor via Flower: http://localhost:5555")
+            
+            # 初始化线程池
+            self.thread_pool = ThreadPoolExecutor(
+                max_workers=settings.MAX_CONCURRENT_TASKS,
+                thread_name_prefix="sql-worker"
+            )
+            
+            self.running = True
+            
+            # 启动事件监听
+            self.logger.info("📡 Starting event listeners...")
+            self._start_event_listeners()
+            
+            self.logger.info("✅ SQLFluff Worker started successfully")
+            
+            # 保持运行状态
+            self._keep_alive()
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to start Worker: {e}")
+            sys.exit(1)
     
     def stop(self):
         """停止Worker"""
         if not self.running:
             return
             
-        service_logger.info("Stopping Event-Driven Worker...")
+        self.logger.info("🛑 Stopping SQLFluff Worker...")
         self.running = False
         
-        # 停止监控
-        if self.monitoring:
-            self.monitoring.stop_heartbeat()
-        
-        # 等待监控线程结束
-        if self.monitoring_thread and self.monitoring_thread.is_alive():
-            self.monitoring_thread.join(timeout=5)
-            
-    def _start_monitoring(self):
-        """在独立线程中启动监控"""
         try:
-            self.monitoring.start_heartbeat()
+            # 停止线程池
+            if self.thread_pool:
+                self.logger.info("Shutting down thread pool...")
+                self.thread_pool.shutdown(wait=True, timeout=30)
             
-            # 保持监控线程运行
-            while self.running:
-                time.sleep(1)
-                
+            self.logger.info("✅ SQLFluff Worker stopped gracefully")
+            
         except Exception as e:
-            service_logger.error(f"Monitoring thread error: {e}")
+            self.logger.error(f"Error during worker shutdown: {e}")
     
     def _signal_handler(self, signum, frame):
         """信号处理器"""
-        service_logger.info(f"Received signal {signum}")
+        self.logger.info(f"Received signal {signum}, initiating graceful shutdown...")
         self.stop()
         sys.exit(0)
+    
+    def _start_event_listeners(self):
+        """启动事件监听器"""
+        try:
+            # 启动SQL检查事件监听
+            listener_thread = threading.Thread(
+                target=self.sql_check_handler.listen_sql_check_events,
+                name="sql-check-listener"
+            )
+            listener_thread.daemon = True
+            listener_thread.start()
+            
+            self.logger.info("Event listeners started")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to start event listeners: {e}")
+            raise
+    
+    def _keep_alive(self):
+        """保持Worker运行"""
+        try:
+            while self.running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            self.logger.info("Received keyboard interrupt")
+            self.stop()
 
 def main():
-    """Worker主启动函数"""
-    setup_logging()
+    """主函数"""
     
-    service_logger.info("=" * 60)
-    service_logger.info("SQLFluff Event-Driven Worker Starting")
-    service_logger.info("Architecture: Event-Driven (No Database Dependencies)")
-    service_logger.info("Processing Mode: Unified Single-File Processing")
-    service_logger.info("Features: Dynamic Rules Configuration")
-    service_logger.info("=" * 60)
-    
-    worker = EventDrivenWorker()
+    # 创建Worker实例并启动
+    worker = SQLFluffWorker()
     worker.start()
-
-
-# 保持向后兼容的函数（暂时保留）
-def create_celery_app():
-    """创建Celery应用实例（已废弃，保留兼容性）"""
-    service_logger.warning("create_celery_app() is deprecated - Worker is now event-driven")
-    return None
-
 
 if __name__ == "__main__":
     main() 

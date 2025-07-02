@@ -1,6 +1,12 @@
 # 事件驱动消息队列
 redis==5.0.1
 
+# Celery任务队列 (保留企业级特性)
+celery==5.3.4
+
+# Flower监控面板
+flower==2.0.1
+
 # 核心逻辑 (SQLFluff分析引擎)
 ./local_wheels/sqlfluff-3.4.1-py3-none-any.whl
 ./local_wheels/sqlfluff_rules_hive_custom-0.1.0-py3-none-any.whl
@@ -12,11 +18,11 @@ psutil==5.9.6
 # 配置管理
 pydantic-setting>=2.1.0
 
-# 服务发现 (已移除)
-# python-consul==1.1.0 (不再需要，改为事件驱动架构)
+# 数据验证 (Celery需要)
+pydantic>=2.8.0
 
 # ========================================
-# 以下依赖已移除（改为事件驱动架构）:
+# 以下依赖已移除（FastAPI层完全移除）:
 # ========================================
 # 
 # Web框架相关:
@@ -30,11 +36,8 @@ pydantic-setting>=2.1.0
 # - pymysql==1.1.0
 # - alembic==1.12.1
 #
-# Celery任务队列:
-# - celery==5.3.4 (改为直接使用Redis pub/sub)
-#
-# 数据验证:
-# - pydantic>=2.8.0 (只保留设置相关的pydantic-settings)
+# 服务发现相关:
+# - python-consul==1.1.0
 #
 # 安全相关:
 # - cryptography==43.0.3 

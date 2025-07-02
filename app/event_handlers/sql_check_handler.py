@@ -12,7 +12,7 @@ from app.services.sqlfluff_service import SQLFluffService
 from app.services.event_service import EventService
 from app.utils.file_utils import FileManager
 from app.models.events import (
-    SqlCheckStartedEvent, SqlCheckCompletedEvent, SqlCheckFailedEvent
+    SqlCheckCompletedEvent, SqlCheckFailedEvent
 )
 from app.core.logging import service_logger
 
@@ -38,20 +38,11 @@ class SqlCheckHandler:
         start_time = time.time()
         payload = event_data['payload']
         job_id = payload['job_id']
-        correlation_id = event_data['correlation_id']
+        correlation_id = event_data.get('correlation_id', 'unknown')
         file_name = payload['file_name']
         
         try:
             self.logger.info(f"Processing SQL check request: {job_id}, file: {file_name}")
-            
-            # 发布开始处理事件
-            started_event = SqlCheckStartedEvent.create(
-                job_id=job_id,
-                worker_id=self.worker_id,
-                file_name=file_name,
-                correlation_id=correlation_id
-            )
-            self.event_service.publish_event("sql_check_events", started_event)
             
             # 从事件获取所有必要信息
             sql_file_path = payload['sql_file_path']
@@ -90,24 +81,24 @@ class SqlCheckHandler:
             self.file_manager.write_json_file(result_path, analysis_result)
             
             # 计算处理时间
-            duration = int(time.time() - start_time)
+            duration = time.time() - start_time
             
             # 发布完成事件（包含批量信息用于Java服务聚合）
             completed_event = SqlCheckCompletedEvent.create(
                 job_id=job_id,
-                worker_id=self.worker_id,
+                file_name=file_name,
+                status="SUCCESS",
                 result=analysis_result,
                 result_file_path=result_path,
-                duration=duration,
-                file_name=file_name,
+                processing_duration=duration,
+                worker_id=self.worker_id,
                 batch_id=batch_id,
                 file_index=file_index,
-                total_files=total_files,
-                correlation_id=correlation_id
+                total_files=total_files
             )
             self.event_service.publish_event("sql_check_events", completed_event)
             
-            self.logger.info(f"SQL check completed: {job_id}, file: {file_name}, duration: {duration}s")
+            self.logger.info(f"SQL check completed: {job_id}, file: {file_name}, duration: {duration:.2f}s")
             
         except Exception as e:
             self.logger.error(f"SQL check failed: {job_id}, file: {file_name}, error: {e}")
@@ -120,19 +111,52 @@ class SqlCheckHandler:
             # 发布失败事件（包含批量信息用于Java服务聚合）
             failed_event = SqlCheckFailedEvent.create(
                 job_id=job_id,
-                worker_id=self.worker_id,
+                file_name=file_name,
                 error={
                     "error_code": "PROCESSING_ERROR",
                     "error_message": str(e),
                     "error_details": str(e.__class__.__name__)
                 },
-                file_name=file_name,
+                worker_id=self.worker_id,
                 batch_id=batch_id,
                 file_index=file_index,
-                total_files=total_files,
-                correlation_id=correlation_id
+                total_files=total_files
             )
             self.event_service.publish_event("sql_check_events", failed_event)
             
             # 重新抛出异常，让上层处理重试逻辑
+            raise
+
+    def listen_sql_check_events(self):
+        """
+        监听SQL检查事件
+        
+        从Redis订阅SQL检查请求事件，并处理
+        """
+        try:
+            self.logger.info("🎧 Starting SQL check event listener...")
+            self.logger.info("📡 Listening on Redis channel: sql_check_requests")
+            
+            # 订阅Redis事件
+            pubsub = self.event_service.redis_client.pubsub()
+            pubsub.subscribe(['sql_check_requests'])
+            
+            for message in pubsub.listen():
+                if message['type'] == 'message':
+                    try:
+                        import json
+                        event_data = json.loads(message['data'])
+                        
+                        if event_data.get('event_type') == 'SqlCheckRequested':
+                            self.handle_sql_check_requested(event_data)
+                        else:
+                            self.logger.warning(f"Unknown event type: {event_data.get('event_type')}")
+                            
+                    except json.JSONDecodeError as e:
+                        self.logger.error(f"Failed to parse event data: {e}")
+                    except Exception as e:
+                        self.logger.error(f"Error processing event: {e}")
+                        
+        except Exception as e:
+            self.logger.error(f"Event listener error: {e}")
             raise 

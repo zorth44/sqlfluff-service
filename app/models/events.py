@@ -1,61 +1,66 @@
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional, Dict, Any, List
-import uuid
+"""
+事件数据模型
 
-@dataclass
+定义系统中使用的事件结构。
+"""
+
+import json
+from datetime import datetime
+from typing import Dict, Any, Optional, List
+
 class BaseEvent:
-    event_id: str
-    event_type: str
-    timestamp: str
-    correlation_id: str
-    payload: Dict[str, Any]
+    """基础事件类"""
+    
+    def __init__(self, event_type: str, payload: Dict[str, Any]):
+        self.event_id = f"evt-{datetime.now().timestamp()}"
+        self.event_type = event_type
+        self.timestamp = datetime.now().isoformat()
+        self.payload = payload
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "event_id": self.event_id,
+            "event_type": self.event_type,
+            "timestamp": self.timestamp,
+            "payload": self.payload
+        }
+    
+    def to_json(self) -> str:
+        """转换为JSON字符串"""
+        return json.dumps(self.to_dict())
     
     @classmethod
-    def create(cls, event_type: str, payload: Dict[str, Any], correlation_id: str = None):
-        return cls(
-            event_id=str(uuid.uuid4()),
-            event_type=event_type,
-            timestamp=datetime.utcnow().isoformat() + "Z",
-            correlation_id=correlation_id or str(uuid.uuid4()),
-            payload=payload
-        )
+    def create(cls, event_type: str, **kwargs) -> 'BaseEvent':
+        """创建事件实例"""
+        return cls(event_type, kwargs)
 
-# 请求事件 - 统一的单文件处理事件
-@dataclass 
 class SqlCheckRequestedEvent(BaseEvent):
+    """SQL检查请求事件"""
+    
     @classmethod
-    def create(cls, 
-               job_id: str, 
-               sql_file_path: str, 
-               file_name: str,
-               dialect: str = "ansi", 
-               user_id: str = None,
-               product_name: str = None,
-               rules: Optional[List[str]] = None,
-               exclude_rules: Optional[List[str]] = None,
-               config_overrides: Optional[Dict[str, Any]] = None,
-               batch_id: str = None,
-               file_index: int = None,
-               total_files: int = None,
-               correlation_id: str = None):
+    def create(cls, job_id: str, sql_file_path: str, file_name: str, 
+              dialect: str = "ansi", user_id: Optional[str] = None,
+              product_name: Optional[str] = None, batch_id: Optional[str] = None,
+              file_index: Optional[int] = None, total_files: Optional[int] = None,
+              rules: Optional[List[str]] = None, exclude_rules: Optional[List[str]] = None,
+              config_overrides: Optional[Dict[str, Any]] = None) -> 'BaseEvent':
         """
-        创建SQL检查请求事件（统一的单文件处理格式）
+        创建SQL检查请求事件
         
         Args:
-            job_id: 任务标识
-            sql_file_path: SQL文件在共享目录中的路径
+            job_id: 任务ID
+            sql_file_path: SQL文件路径（在共享存储中）
             file_name: 文件名
             dialect: SQL方言
             user_id: 用户ID
             product_name: 产品名称
+            batch_id: 批次ID（仅ZIP来源）
+            file_index: 文件索引（仅ZIP来源）
+            total_files: 总文件数（仅ZIP来源）
             rules: 启用的规则列表
-            exclude_rules: 排除的规则列表  
+            exclude_rules: 排除的规则列表
             config_overrides: 配置覆盖
-            batch_id: 批次标识（仅ZIP来源时存在）
-            file_index: 文件在批次中的索引（仅ZIP来源时存在）
-            total_files: 批次总文件数（仅ZIP来源时存在）
-            correlation_id: 关联ID
         """
         payload = {
             "job_id": job_id,
@@ -64,13 +69,17 @@ class SqlCheckRequestedEvent(BaseEvent):
             "dialect": dialect
         }
         
-        # 添加可选的用户信息
+        # 添加可选字段
         if user_id:
             payload["user_id"] = user_id
         if product_name:
             payload["product_name"] = product_name
-            
-        # 添加动态规则配置（可选）
+        if batch_id:
+            payload["batch_id"] = batch_id
+        if file_index is not None:
+            payload["file_index"] = file_index
+        if total_files is not None:
+            payload["total_files"] = total_files
         if rules:
             payload["rules"] = rules
         if exclude_rules:
@@ -78,64 +87,42 @@ class SqlCheckRequestedEvent(BaseEvent):
         if config_overrides:
             payload["config_overrides"] = config_overrides
             
-        # 添加批量处理相关字段（仅在ZIP来源时存在，用于Java服务结果聚合）
-        if batch_id:
-            payload["batch_id"] = batch_id
-        if file_index is not None:
-            payload["file_index"] = file_index
-        if total_files is not None:
-            payload["total_files"] = total_files
-            
-        return super().create("SqlCheckRequested", payload, correlation_id)
+        return super().create("SqlCheckRequested", **payload)
 
-# 开始处理事件
-@dataclass
-class SqlCheckStartedEvent(BaseEvent):
-    @classmethod
-    def create(cls, job_id: str, worker_id: str, file_name: str = None, correlation_id: str = None):
-        payload = {
-            "job_id": job_id,
-            "worker_id": worker_id,
-            "estimated_duration": 30
-        }
-        if file_name:
-            payload["file_name"] = file_name
-            
-        return super().create("SqlCheckStarted", payload, correlation_id)
-
-# 处理完成事件
-@dataclass
 class SqlCheckCompletedEvent(BaseEvent):
+    """SQL检查完成事件"""
+    
     @classmethod
-    def create(cls, 
-               job_id: str, 
-               worker_id: str, 
-               result: Dict[str, Any], 
-               result_file_path: str, 
-               duration: int, 
-               file_name: str = None,
-               batch_id: str = None,
-               file_index: int = None,
-               total_files: int = None,
-               correlation_id: str = None):
+    def create(cls, job_id: str, file_name: str, status: str, result: Dict[str, Any],
+              result_file_path: str, processing_duration: float, worker_id: str,
+              batch_id: Optional[str] = None, file_index: Optional[int] = None,
+              total_files: Optional[int] = None) -> 'BaseEvent':
         """
         创建SQL检查完成事件
         
-        包含批量处理信息（如果来源于ZIP），用于Java服务结果聚合
+        Args:
+            job_id: 任务ID
+            file_name: 文件名
+            status: 处理状态
+            result: 分析结果
+            result_file_path: 结果文件路径
+            processing_duration: 处理耗时
+            worker_id: Worker ID
+            batch_id: 批次ID（仅ZIP来源）
+            file_index: 文件索引（仅ZIP来源）
+            total_files: 总文件数（仅ZIP来源）
         """
         payload = {
             "job_id": job_id,
-            "worker_id": worker_id,
-            "status": "SUCCESS",
+            "file_name": file_name,
+            "status": status,
             "result": result,
             "result_file_path": result_file_path,
-            "processing_duration": duration
+            "processing_duration": processing_duration,
+            "worker_id": worker_id
         }
         
-        if file_name:
-            payload["file_name"] = file_name
-            
-        # 如果是批量处理，包含批量信息用于Java服务聚合
+        # 添加批次信息
         if batch_id:
             payload["batch_id"] = batch_id
         if file_index is not None:
@@ -143,37 +130,36 @@ class SqlCheckCompletedEvent(BaseEvent):
         if total_files is not None:
             payload["total_files"] = total_files
             
-        return super().create("SqlCheckCompleted", payload, correlation_id)
+        return super().create("SqlCheckCompleted", **payload)
 
-# 处理失败事件
-@dataclass
 class SqlCheckFailedEvent(BaseEvent):
+    """SQL检查失败事件"""
+    
     @classmethod
-    def create(cls, 
-               job_id: str, 
-               worker_id: str, 
-               error: Dict[str, Any], 
-               file_name: str = None,
-               batch_id: str = None,
-               file_index: int = None,
-               total_files: int = None,
-               correlation_id: str = None):
+    def create(cls, job_id: str, file_name: str, error: Dict[str, str], 
+              worker_id: str, batch_id: Optional[str] = None,
+              file_index: Optional[int] = None, total_files: Optional[int] = None) -> 'BaseEvent':
         """
         创建SQL检查失败事件
         
-        包含批量处理信息（如果来源于ZIP），用于Java服务结果聚合
+        Args:
+            job_id: 任务ID
+            file_name: 文件名
+            error: 错误信息
+            worker_id: Worker ID
+            batch_id: 批次ID（仅ZIP来源）
+            file_index: 文件索引（仅ZIP来源）
+            total_files: 总文件数（仅ZIP来源）
         """
         payload = {
             "job_id": job_id,
-            "worker_id": worker_id,
+            "file_name": file_name,
             "status": "FAILED",
-            "error": error
+            "error": error,
+            "worker_id": worker_id
         }
         
-        if file_name:
-            payload["file_name"] = file_name
-            
-        # 如果是批量处理，包含批量信息用于Java服务聚合
+        # 添加批次信息
         if batch_id:
             payload["batch_id"] = batch_id
         if file_index is not None:
@@ -181,18 +167,4 @@ class SqlCheckFailedEvent(BaseEvent):
         if total_files is not None:
             payload["total_files"] = total_files
             
-        return super().create("SqlCheckFailed", payload, correlation_id)
-
-# Worker监控事件
-@dataclass
-class WorkerHeartbeatEvent(BaseEvent):
-    @classmethod
-    def create(cls, worker_id: str, current_tasks: int, total_processed: int, uptime: int):
-        payload = {
-            "worker_id": worker_id,
-            "current_tasks": current_tasks,
-            "total_processed": total_processed,
-            "uptime_seconds": uptime,
-            "status": "BUSY" if current_tasks > 0 else "IDLE"
-        }
-        return super().create("WorkerHeartbeat", payload) 
+        return super().create("SqlCheckFailed", **payload) 
