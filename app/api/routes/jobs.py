@@ -65,9 +65,9 @@ async def create_job(
         raise handle_service_exception(e, "创建核验工作")
 
 
-@router.get("/jobs/{job_id}", response_model=JobDetailResponse)
+@router.get("/jobs", response_model=JobDetailResponse)
 async def get_job(
-    job_id: str = Depends(validate_job_id),
+    job_id: str = Query(..., description="核验工作ID"),
     pagination: tuple[int, int] = Depends(get_pagination_params),
     job_service: JobService = Depends(get_job_service)
 ):
@@ -78,6 +78,9 @@ async def get_job(
     可以通过分页参数控制Task列表的返回数量。
     """
     try:
+        # 验证job_id格式
+        job_id = validate_job_id(job_id)
+        
         page, size = pagination
         api_logger.info(f"查询Job: {job_id}, 页码: {page}, 大小: {size}")
         
@@ -101,7 +104,7 @@ async def get_job(
         raise handle_service_exception(e, "查询核验工作")
 
 
-@router.get("/jobs", response_model=JobListResponse)
+@router.get("/jobs/list", response_model=JobListResponse)
 async def list_jobs(
     pagination: tuple[int, int] = Depends(get_pagination_params),
     status_filter: Optional[JobStatusEnum] = Query(None, alias="status", description="状态过滤"),
@@ -158,9 +161,9 @@ async def get_job_statistics(
         raise handle_service_exception(e, "查询统计信息")
 
 
-@router.get("/jobs/{job_id}/tasks", response_model=JobTaskIdsResponse)
+@router.get("/jobs/tasks", response_model=JobTaskIdsResponse)
 async def get_job_task_ids(
-    job_id: str = Depends(validate_job_id),
+    job_id: str = Query(..., description="核验工作ID"),
     job_service: JobService = Depends(get_job_service)
 ):
     """
@@ -169,6 +172,9 @@ async def get_job_task_ids(
     返回指定Job下的所有Task ID，用于批量操作或快速查看任务列表。
     """
     try:
+        # 验证job_id格式
+        job_id = validate_job_id(job_id)
+        
         api_logger.info(f"查询Job任务ID列表: {job_id}")
         
         # 调用业务服务获取任务ID列表
@@ -199,9 +205,9 @@ async def get_job_task_ids(
 
 # ============= 内部管理接口（可选实现） =============
 
-@router.put("/jobs/{job_id}/status", include_in_schema=False)
+@router.put("/jobs/status", include_in_schema=False)
 async def update_job_status(
-    job_id: str = Depends(validate_job_id),
+    job_id: str = Query(..., description="核验工作ID"),
     status_update: dict = None,  # 简化的状态更新，实际应该用专门的schema
     job_service: JobService = Depends(get_job_service)
 ):
@@ -211,6 +217,9 @@ async def update_job_status(
     此接口主要用于Celery Worker更新Job状态，不对外公开。
     """
     try:
+        # 验证job_id格式
+        job_id = validate_job_id(job_id)
+        
         api_logger.info(f"更新Job状态: {job_id}, {status_update}")
         
         if not status_update or 'status' not in status_update:

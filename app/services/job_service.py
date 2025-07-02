@@ -65,7 +65,9 @@ class JobService:
                 status=JobStatusEnum.ACCEPTED,
                 submission_type=submission_type,
                 source_path=source_path,
-                dialect=request.dialect or "ansi"
+                dialect=request.dialect or "ansi",
+                user_id=request.user_id,
+                product_name=request.product_name
             )
             
             self.db.add(job)
@@ -162,6 +164,8 @@ class JobService:
                 submission_type=job.submission_type,
                 source_path=job.source_path,
                 dialect=job.dialect,
+                user_id=job.user_id,
+                product_name=job.product_name,
                 created_at=job.created_at,
                 updated_at=job.updated_at,
                 error_message=job.error_message,
@@ -394,6 +398,8 @@ class JobService:
                     submission_type=job.submission_type,
                     source_path=job.source_path,
                     dialect=job.dialect,
+                    user_id=job.user_id,
+                    product_name=job.product_name,
                     created_at=job.created_at,
                     updated_at=job.updated_at,
                     task_count=job.get_task_count(),

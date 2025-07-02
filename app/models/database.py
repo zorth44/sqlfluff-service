@@ -61,6 +61,20 @@ class LintingJob(Base):
         comment="SQLFluff方言，如mysql、postgres、bigquery等"
     )
     
+    user_id = Column(
+        String(255),
+        nullable=False,
+        index=True,
+        comment="创建工作的用户ID"
+    )
+    
+    product_name = Column(
+        String(255),
+        nullable=False,
+        index=True,
+        comment="产品名称"
+    )
+    
     error_message = Column(
         Text,
         nullable=True,
@@ -103,6 +117,8 @@ class LintingJob(Base):
             'submission_type': self.submission_type,
             'source_path': self.source_path,
             'dialect': self.dialect,
+            'user_id': self.user_id,
+            'product_name': self.product_name,
             'error_message': self.error_message,
             'created_at': self.created_at,
             'updated_at': self.updated_at
@@ -248,6 +264,10 @@ class LintingTask(Base):
 # Job表索引
 Index('idx_job_status_created', LintingJob.status, LintingJob.created_at)
 Index('idx_job_type_status', LintingJob.submission_type, LintingJob.status)
+Index('idx_job_user_status', LintingJob.user_id, LintingJob.status)
+Index('idx_job_user_created', LintingJob.user_id, LintingJob.created_at)
+Index('idx_job_product_status', LintingJob.product_name, LintingJob.status)
+Index('idx_job_product_created', LintingJob.product_name, LintingJob.created_at)
 
 # Task表索引
 Index('idx_task_job_status', LintingTask.job_id, LintingTask.status)

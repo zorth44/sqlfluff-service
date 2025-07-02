@@ -32,6 +32,12 @@ class JobCreateRequest(BaseModel):
         default="ansi",
         description="SQLFluff方言，如mysql、postgres、bigquery等"
     )
+    user_id: str = Field(
+        description="创建工作的用户ID"
+    )
+    product_name: str = Field(
+        description="产品名称"
+    )
     
     @model_validator(mode='after')
     def validate_request(self):
@@ -100,6 +106,26 @@ class JobCreateRequest(BaseModel):
             if v not in supported_dialects:
                 raise ValueError(f"不支持的方言: {v}，支持的方言包括: {', '.join(sorted(supported_dialects))}")
         return v
+    
+    @validator('user_id')
+    def validate_user_id(cls, v):
+        """验证用户ID"""
+        if not v or not v.strip():
+            raise ValueError("用户ID不能为空")
+        v = v.strip()
+        if len(v) > 255:
+            raise ValueError("用户ID不能超过255字符")
+        return v
+    
+    @validator('product_name')
+    def validate_product_name(cls, v):
+        """验证产品名称"""
+        if not v or not v.strip():
+            raise ValueError("产品名称不能为空")
+        v = v.strip()
+        if len(v) > 255:
+            raise ValueError("产品名称不能超过255字符")
+        return v
 
 
 class JobCreateResponse(BaseModel):
@@ -121,6 +147,8 @@ class JobSummary(BaseModel):
     submission_type: SubmissionTypeEnum = Field(description="提交类型")
     source_path: str = Field(description="源文件路径")
     dialect: str = Field(description="SQLFluff方言")
+    user_id: str = Field(description="创建工作的用户ID")
+    product_name: str = Field(description="产品名称")
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="最后更新时间")
     task_count: int = Field(description="任务总数")
@@ -139,6 +167,8 @@ class JobSummary(BaseModel):
                 "submission_type": "ZIP_ARCHIVE",
                 "source_path": "archives/your-uploaded-file-uuid.zip",
                 "dialect": "mysql",
+                "user_id": "user123",
+                "product_name": "MyProduct",
                 "created_at": "2025-06-27T09:30:00.123456",
                 "updated_at": "2025-06-27T09:30:05.654321",
                 "task_count": 50,
@@ -181,6 +211,8 @@ class JobDetailResponse(BaseModel):
     submission_type: SubmissionTypeEnum = Field(description="提交类型")
     source_path: str = Field(description="源文件路径")
     dialect: str = Field(description="SQLFluff方言")
+    user_id: str = Field(description="创建工作的用户ID")
+    product_name: str = Field(description="产品名称")
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="最后更新时间")
     error_message: Optional[str] = Field(default=None, description="错误消息")
@@ -200,6 +232,8 @@ class JobDetailResponse(BaseModel):
                 "submission_type": "ZIP_ARCHIVE",
                 "source_path": "archives/your-uploaded-file-uuid.zip",
                 "dialect": "mysql",
+                "user_id": "user123",
+                "product_name": "MyProduct",
                 "created_at": "2025-06-27T09:30:00.123456",
                 "updated_at": "2025-06-27T09:30:05.654321",
                 "sub_tasks": {
@@ -257,6 +291,8 @@ class JobListResponse(BaseModel):
                             "submission_type": "ZIP_ARCHIVE",
                             "source_path": "archives/example.zip",
                             "dialect": "postgres",
+                            "user_id": "user456",
+                            "product_name": "AnotherProduct",
                             "created_at": "2025-06-27T09:30:00.123456",
                             "updated_at": "2025-06-27T09:35:00.123456",
                             "task_count": 50,

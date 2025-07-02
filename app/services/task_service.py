@@ -325,10 +325,14 @@ class TaskService:
             
             result_data = self.file_manager.read_json_file(task.result_file_path)
             
+            # 获取 file_info 并添加 file_path 属性
+            file_info = result_data.get('file_info', {})
+            file_info['file_path'] = task.source_file_path
+            
             return TaskResultContent(
                 violations=result_data.get('violations', []),
                 summary=result_data.get('summary', {}),
-                file_info=result_data.get('file_info', {}),
+                file_info=file_info,
                 analysis_metadata=result_data.get('analysis_metadata', {})
             )
             

@@ -25,9 +25,9 @@ from app.utils.file_utils import FileManager
 router = APIRouter()
 
 
-@router.get("/tasks/{task_id}", response_model=TaskDetailResponse)
+@router.get("/tasks", response_model=TaskDetailResponse)
 async def get_task(
-    task_id: str = Depends(validate_task_id),
+    task_id: str = Query(..., description="任务ID"),
     task_service: TaskService = Depends(get_task_service)
 ):
     """
@@ -36,6 +36,9 @@ async def get_task(
     返回任务的完整信息，包括状态、文件路径、处理时长等。
     """
     try:
+        # 验证task_id格式
+        task_id = validate_task_id(task_id)
+        
         api_logger.info(f"查询Task详情: {task_id}")
         
         # 调用业务服务查询Task详情
@@ -58,9 +61,9 @@ async def get_task(
         raise handle_service_exception(e, "查询任务详情")
 
 
-@router.get("/tasks/{task_id}/result", response_model=TaskResultContent)
+@router.get("/tasks/result", response_model=TaskResultContent)
 async def get_task_result(
-    task_id: str = Depends(validate_task_id),
+    task_id: str = Query(..., description="任务ID"),
     task_service: TaskService = Depends(get_task_service)
 ):
     """
@@ -70,6 +73,9 @@ async def get_task_result(
     只有状态为SUCCESS的任务才能获取结果。
     """
     try:
+        # 验证task_id格式
+        task_id = validate_task_id(task_id)
+        
         api_logger.info(f"获取Task结果: {task_id}")
         
         # 首先检查任务状态
@@ -116,9 +122,9 @@ async def get_task_result(
         raise handle_service_exception(e, "获取任务结果")
 
 
-@router.get("/tasks/{task_id}/result/download")
+@router.get("/tasks/result/download")
 async def download_task_result(
-    task_id: str = Depends(validate_task_id),
+    task_id: str = Query(..., description="任务ID"),
     task_service: TaskService = Depends(get_task_service)
 ):
     """
@@ -127,6 +133,9 @@ async def download_task_result(
     直接返回JSON文件供下载。
     """
     try:
+        # 验证task_id格式
+        task_id = validate_task_id(task_id)
+        
         api_logger.info(f"下载Task结果: {task_id}")
         
         # 检查任务状态
@@ -164,7 +173,7 @@ async def download_task_result(
         raise handle_service_exception(e, "下载任务结果")
 
 
-@router.get("/tasks", response_model=TaskListResponse)
+@router.get("/tasks/list", response_model=TaskListResponse)
 async def list_tasks(
     pagination: tuple[int, int] = Depends(get_pagination_params),
     status_filter: Optional[TaskStatusEnum] = Query(None, alias="status", description="状态过滤"),
