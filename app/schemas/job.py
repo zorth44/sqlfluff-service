@@ -8,6 +8,7 @@ Job相关API数据模型
 from pydantic import BaseModel, Field, validator, model_validator
 from typing import Optional, List
 from datetime import datetime
+from fastapi import Form, UploadFile, File
 
 from app.schemas.common import (
     JobStatusEnum, 
@@ -37,6 +38,14 @@ class JobCreateRequest(BaseModel):
     )
     product_name: str = Field(
         description="产品名称"
+    )
+    boc_batch_number: Optional[str] = Field(
+        default=None,
+        description="BOC批次号"
+    )
+    boc_task_number: Optional[str] = Field(
+        default=None,
+        description="BOC任务号"
     )
     
     @model_validator(mode='after')
@@ -126,6 +135,135 @@ class JobCreateRequest(BaseModel):
         if len(v) > 255:
             raise ValueError("产品名称不能超过255字符")
         return v
+    
+    @validator('boc_batch_number')
+    def validate_boc_batch_number(cls, v):
+        """验证BOC批次号"""
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 255:
+                raise ValueError("BOC批次号不能超过255字符")
+        return v
+    
+    @validator('boc_task_number')
+    def validate_boc_task_number(cls, v):
+        """验证BOC任务号"""
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 255:
+                raise ValueError("BOC任务号不能超过255字符")
+        return v
+
+
+class JobCreateWithUploadRequest(BaseModel):
+    """创建核验工作请求模型（带文件上传）"""
+    sql_content: Optional[str] = Field(
+        default=None,
+        description="单段SQL内容（与zip_file二选一）"
+    )
+    dialect: Optional[str] = Field(
+        default="ansi",
+        description="SQLFluff方言，如mysql、postgres、bigquery等"
+    )
+    user_id: str = Field(
+        description="创建工作的用户ID"
+    )
+    product_name: str = Field(
+        description="产品名称"
+    )
+    boc_batch_number: Optional[str] = Field(
+        default=None,
+        description="BOC批次号"
+    )
+    boc_task_number: Optional[str] = Field(
+        default=None,
+        description="BOC任务号"
+    )
+    
+    @validator('sql_content')
+    def validate_sql_content(cls, v):
+        """验证SQL内容"""
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("SQL内容不能为空")
+            if len(v) > 1024 * 1024:  # 1MB限制
+                raise ValueError("SQL内容不能超过1MB")
+        return v
+    
+    @validator('dialect')
+    def validate_dialect(cls, v):
+        """验证SQLFluff方言"""
+        if v is not None:
+            v = v.strip().lower()
+            if not v:
+                raise ValueError("方言不能为空")
+            
+            # 动态获取SQLFluff支持的方言列表
+            try:
+                from app.services.sqlfluff_service import SQLFluffService
+                service = SQLFluffService()
+                supported_dialects = set(service.get_supported_dialects())
+            except Exception:
+                # 如果动态获取失败，使用常见的方言作为fallback
+                supported_dialects = {
+                    'ansi', 'mysql', 'postgres', 'postgresql', 'sqlite', 'bigquery', 
+                    'snowflake', 'redshift', 'oracle', 'tsql', 'hive', 'spark',
+                    'teradata', 'exasol', 'db2', 'duckdb', 'gbase8a', 'mariadb',
+                    'clickhouse', 'databricks', 'athena', 'duckdb', 'greenplum',
+                    'materializ', 'impala', 'soql', 'sparksql', 'starrocks', 
+                    'trino', 'vertica'
+                }
+            
+            if v not in supported_dialects:
+                raise ValueError(f"不支持的方言: {v}，支持的方言包括: {', '.join(sorted(supported_dialects))}")
+        return v
+    
+    @validator('user_id')
+    def validate_user_id(cls, v):
+        """验证用户ID"""
+        if not v or not v.strip():
+            raise ValueError("用户ID不能为空")
+        v = v.strip()
+        if len(v) > 255:
+            raise ValueError("用户ID不能超过255字符")
+        return v
+    
+    @validator('product_name')
+    def validate_product_name(cls, v):
+        """验证产品名称"""
+        if not v or not v.strip():
+            raise ValueError("产品名称不能为空")
+        v = v.strip()
+        if len(v) > 255:
+            raise ValueError("产品名称不能超过255字符")
+        return v
+    
+    @validator('boc_batch_number')
+    def validate_boc_batch_number(cls, v):
+        """验证BOC批次号"""
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 255:
+                raise ValueError("BOC批次号不能超过255字符")
+        return v
+    
+    @validator('boc_task_number')
+    def validate_boc_task_number(cls, v):
+        """验证BOC任务号"""
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 255:
+                raise ValueError("BOC任务号不能超过255字符")
+        return v
 
 
 class JobCreateResponse(BaseModel):
@@ -149,6 +287,8 @@ class JobSummary(BaseModel):
     dialect: str = Field(description="SQLFluff方言")
     user_id: str = Field(description="创建工作的用户ID")
     product_name: str = Field(description="产品名称")
+    boc_batch_number: Optional[str] = Field(default=None, description="BOC批次号")
+    boc_task_number: Optional[str] = Field(default=None, description="BOC任务号")
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="最后更新时间")
     task_count: int = Field(description="任务总数")
@@ -213,6 +353,8 @@ class JobDetailResponse(BaseModel):
     dialect: str = Field(description="SQLFluff方言")
     user_id: str = Field(description="创建工作的用户ID")
     product_name: str = Field(description="产品名称")
+    boc_batch_number: Optional[str] = Field(default=None, description="BOC批次号")
+    boc_task_number: Optional[str] = Field(default=None, description="BOC任务号")
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="最后更新时间")
     error_message: Optional[str] = Field(default=None, description="错误消息")

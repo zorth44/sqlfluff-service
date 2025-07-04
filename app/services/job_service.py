@@ -67,7 +67,9 @@ class JobService:
                 source_path=source_path,
                 dialect=request.dialect or "ansi",
                 user_id=request.user_id,
-                product_name=request.product_name
+                product_name=request.product_name,
+                boc_batch_number=request.boc_batch_number,
+                boc_task_number=request.boc_task_number
             )
             
             self.db.add(job)
@@ -166,6 +168,8 @@ class JobService:
                 dialect=job.dialect,
                 user_id=job.user_id,
                 product_name=job.product_name,
+                boc_batch_number=job.boc_batch_number,
+                boc_task_number=job.boc_task_number,
                 created_at=job.created_at,
                 updated_at=job.updated_at,
                 error_message=job.error_message,
@@ -400,6 +404,8 @@ class JobService:
                     dialect=job.dialect,
                     user_id=job.user_id,
                     product_name=job.product_name,
+                    boc_batch_number=job.boc_batch_number,
+                    boc_task_number=job.boc_task_number,
                     created_at=job.created_at,
                     updated_at=job.updated_at,
                     task_count=job.get_task_count(),

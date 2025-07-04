@@ -22,9 +22,17 @@ class Settings(BaseSettings):
     
     # ============= 数据库配置 =============
     DATABASE_URL: str = Field(
+        default="",
         description="MySQL数据库连接字符串",
         env="DATABASE_URL"
     )
+    # 分离的数据库配置变量
+    MYSQL_DATABASE_HOST: Optional[str] = Field(default=None, description="MySQL数据库主机", env="MYSQL_DATABASE_HOST")
+    MYSQL_DATABASE_PORT: Optional[int] = Field(default=None, description="MySQL数据库端口", env="MYSQL_DATABASE_PORT")
+    MYSQL_DATABASE_USERNAME: Optional[str] = Field(default=None, description="MySQL数据库用户名", env="MYSQL_DATABASE_USERNAME")
+    MYSQL_DATABASE_PASSWORD: Optional[str] = Field(default=None, description="MySQL数据库密码", env="MYSQL_DATABASE_PASSWORD")
+    MYSQL_DATABASE_NAME: Optional[str] = Field(default=None, description="MySQL数据库名称", env="MYSQL_DATABASE_NAME")
+    
     DATABASE_POOL_SIZE: int = Field(default=20, description="数据库连接池大小")
     DATABASE_MAX_OVERFLOW: int = Field(default=30, description="数据库连接池最大溢出")
     DATABASE_POOL_TIMEOUT: int = Field(default=30, description="数据库连接超时时间")
@@ -46,8 +54,8 @@ class Settings(BaseSettings):
     )
     
     # ============= Consul服务发现配置 =============
-    CONSUL_HOST: str = Field(default="127.0.0.1", description="Consul Agent主机地址")
-    CONSUL_PORT: int = Field(default=8500, description="Consul Agent端口")
+    CONSUL_HOST: str = Field(default="127.0.0.1", description="Consul Agent主机地址", env="CONSUL_HOST")
+    CONSUL_PORT: int = Field(default=8500, description="Consul Agent端口", env="CONSUL_PORT")
     CONSUL_SERVICE_NAME: str = Field(default="sql-linting-service", description="服务名称")
     CONSUL_SERVICE_PORT: int = Field(default=8000, description="服务端口")
     CONSUL_HEALTH_CHECK_INTERVAL: str = Field(default="10s", description="健康检查间隔")
@@ -83,6 +91,9 @@ class Settings(BaseSettings):
     MAX_ZIP_FILES: int = Field(default=1000, description="ZIP包中最大文件数")
     TEMP_DIR_CLEANUP_INTERVAL: int = Field(default=3600, description="临时目录清理间隔(秒)")
     
+    # ============= 任务处理配置 =============
+    MAX_CONCURRENT_TASKS: int = Field(default=8, description="最大并发任务数", env="MAX_CONCURRENT_TASKS")
+    
     @validator('ENVIRONMENT')
     def validate_environment(cls, v):
         """验证环境配置"""
@@ -112,9 +123,32 @@ class Settings(BaseSettings):
             return False
         return v
     
+    @validator('CONSUL_HOST', pre=True)
+    def set_consul_host_from_url(cls, v):
+        """如果提供了CONSUL_URL，则使用它作为CONSUL_HOST"""
+        consul_url = os.getenv('CONSUL_URL')
+        if consul_url:
+            return consul_url
+        return v
+    
     def get_database_url(self) -> str:
         """获取数据库连接URL"""
-        return self.DATABASE_URL
+        # 如果已经设置了DATABASE_URL，直接使用
+        if self.DATABASE_URL:
+            return self.DATABASE_URL
+        
+        # 否则从分离的配置变量构建
+        if all([
+            self.MYSQL_DATABASE_HOST,
+            self.MYSQL_DATABASE_PORT,
+            self.MYSQL_DATABASE_USERNAME,
+            self.MYSQL_DATABASE_PASSWORD,
+            self.MYSQL_DATABASE_NAME
+        ]):
+            return f"mysql+aiomysql://{self.MYSQL_DATABASE_USERNAME}:{self.MYSQL_DATABASE_PASSWORD}@{self.MYSQL_DATABASE_HOST}:{self.MYSQL_DATABASE_PORT}/{self.MYSQL_DATABASE_NAME}"
+        
+        # 如果两种配置都没有提供，返回默认值或抛出错误
+        raise ValueError("Database configuration is incomplete. Please provide either DATABASE_URL or all MySQL database configuration variables.")
     
     def get_celery_broker_url(self) -> str:
         """获取Celery Broker Redis连接URL"""
@@ -200,17 +234,34 @@ def load_settings_from_env() -> Settings:
 def validate_production_config(settings: Settings) -> None:
     """验证生产环境配置"""
     if settings.is_production():
-        critical_configs = [
-            'DATABASE_URL',
-            'REDIS_HOST',
-            'NFS_SHARE_ROOT_PATH',
-            'CONSUL_HOST'
-        ]
+        # 检查Redis配置
+        if not settings.REDIS_HOST or settings.REDIS_HOST in ['localhost', '127.0.0.1']:
+            raise ValueError("生产环境配置 REDIS_HOST 不能为空或使用本地地址")
         
-        for config_name in critical_configs:
-            config_value = getattr(settings, config_name)
-            if not config_value or config_value in ['localhost', '127.0.0.1']:
-                raise ValueError(f"生产环境配置 {config_name} 不能为空或使用本地地址")
+        # 检查NFS配置
+        if not settings.NFS_SHARE_ROOT_PATH:
+            raise ValueError("生产环境配置 NFS_SHARE_ROOT_PATH 不能为空")
+        
+        # 检查Consul配置
+        if not settings.CONSUL_HOST or settings.CONSUL_HOST in ['localhost', '127.0.0.1']:
+            raise ValueError("生产环境配置 CONSUL_HOST 不能为空或使用本地地址")
+        
+        # 检查数据库配置 - 支持两种方式
+        has_database_url = bool(settings.DATABASE_URL)
+        has_separate_db_config = all([
+            settings.MYSQL_DATABASE_HOST,
+            settings.MYSQL_DATABASE_PORT,
+            settings.MYSQL_DATABASE_USERNAME,
+            settings.MYSQL_DATABASE_PASSWORD,
+            settings.MYSQL_DATABASE_NAME
+        ])
+        
+        if not has_database_url and not has_separate_db_config:
+            raise ValueError("生产环境必须提供数据库配置：要么设置DATABASE_URL，要么设置所有MySQL配置变量")
+        
+        # 如果使用分离的配置，检查主机不能是本地地址
+        if has_separate_db_config and settings.MYSQL_DATABASE_HOST in ['localhost', '127.0.0.1']:
+            raise ValueError("生产环境配置 MYSQL_DATABASE_HOST 不能使用本地地址")
         
         if settings.DEBUG:
             raise ValueError("生产环境不能开启DEBUG模式")

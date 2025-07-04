@@ -32,10 +32,14 @@ check_env_vars() {
     log_info "检查环境变量..."
     
     local required_vars=(
-        "DATABASE_URL"
         "REDIS_HOST"
         "REDIS_PORT"
         "NFS_SHARE_ROOT_PATH"
+        "MYSQL_DATABASE_HOST"
+        "MYSQL_DATABASE_PORT"
+        "MYSQL_DATABASE_USERNAME"
+        "MYSQL_DATABASE_PASSWORD"
+        "MYSQL_DATABASE_NAME"
     )
     
     local missing_vars=()
@@ -52,6 +56,16 @@ check_env_vars() {
             echo "  - $var"
         done
         exit 1
+    fi
+    
+    # 构建数据库URL
+    export DATABASE_URL="mysql+aiomysql://${MYSQL_DATABASE_USERNAME}:${MYSQL_DATABASE_PASSWORD}@${MYSQL_DATABASE_HOST}:${MYSQL_DATABASE_PORT}/${MYSQL_DATABASE_NAME}"
+    log_info "数据库URL已构建: mysql+aiomysql://${MYSQL_DATABASE_USERNAME}:***@${MYSQL_DATABASE_HOST}:${MYSQL_DATABASE_PORT}/${MYSQL_DATABASE_NAME}"
+    
+    # 设置Consul配置
+    if [[ -n "$CONSUL_URL" ]]; then
+        export CONSUL_HOST="$CONSUL_URL"
+        log_info "Consul配置: $CONSUL_HOST:${CONSUL_PORT:-8500}"
     fi
     
     log_success "环境变量检查通过"

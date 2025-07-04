@@ -33,10 +33,14 @@ def check_environment() -> bool:
         bool: 环境检查是否通过
     """
     required_vars = [
-        'DATABASE_URL',
         'REDIS_HOST',
         'REDIS_PORT',
-        'NFS_SHARE_ROOT_PATH'
+        'NFS_SHARE_ROOT_PATH',
+        'MYSQL_DATABASE_HOST',
+        'MYSQL_DATABASE_PORT',
+        'MYSQL_DATABASE_USERNAME',
+        'MYSQL_DATABASE_PASSWORD',
+        'MYSQL_DATABASE_NAME'
     ]
     
     missing_vars = []
@@ -50,6 +54,23 @@ def check_environment() -> bool:
         for var in missing_vars:
             print(f"   export {var}=<value>")
         return False
+    
+    # 构建数据库URL
+    username = os.getenv('MYSQL_DATABASE_USERNAME')
+    password = os.getenv('MYSQL_DATABASE_PASSWORD')
+    host = os.getenv('MYSQL_DATABASE_HOST')
+    port = os.getenv('MYSQL_DATABASE_PORT')
+    database = os.getenv('MYSQL_DATABASE_NAME')
+    
+    database_url = f"mysql+aiomysql://{username}:{password}@{host}:{port}/{database}"
+    os.environ['DATABASE_URL'] = database_url
+    print(f"✅ Database URL constructed: mysql+aiomysql://{username}:***@{host}:{port}/{database}")
+    
+    # 设置Consul配置
+    consul_url = os.getenv('CONSUL_URL')
+    if consul_url:
+        os.environ['CONSUL_HOST'] = consul_url
+        print(f"✅ Consul configuration set: {consul_url}:{os.getenv('CONSUL_PORT', '8500')}")
     
     print("✅ Environment variables check passed")
     return True

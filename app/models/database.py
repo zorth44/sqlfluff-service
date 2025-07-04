@@ -75,6 +75,20 @@ class LintingJob(Base):
         comment="产品名称"
     )
     
+    boc_batch_number = Column(
+        String(255),
+        nullable=True,
+        index=True,
+        comment="BOC批次号"
+    )
+    
+    boc_task_number = Column(
+        String(255),
+        nullable=True,
+        index=True,
+        comment="BOC任务号"
+    )
+    
     error_message = Column(
         Text,
         nullable=True,
@@ -119,6 +133,8 @@ class LintingJob(Base):
             'dialect': self.dialect,
             'user_id': self.user_id,
             'product_name': self.product_name,
+            'boc_batch_number': self.boc_batch_number,
+            'boc_task_number': self.boc_task_number,
             'error_message': self.error_message,
             'created_at': self.created_at,
             'updated_at': self.updated_at
@@ -268,6 +284,10 @@ Index('idx_job_user_status', LintingJob.user_id, LintingJob.status)
 Index('idx_job_user_created', LintingJob.user_id, LintingJob.created_at)
 Index('idx_job_product_status', LintingJob.product_name, LintingJob.status)
 Index('idx_job_product_created', LintingJob.product_name, LintingJob.created_at)
+Index('idx_job_boc_batch_status', LintingJob.boc_batch_number, LintingJob.status)
+Index('idx_job_boc_batch_created', LintingJob.boc_batch_number, LintingJob.created_at)
+Index('idx_job_boc_task_status', LintingJob.boc_task_number, LintingJob.status)
+Index('idx_job_boc_task_created', LintingJob.boc_task_number, LintingJob.created_at)
 
 # Task表索引
 Index('idx_task_job_status', LintingTask.job_id, LintingTask.status)

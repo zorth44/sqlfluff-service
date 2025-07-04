@@ -4,7 +4,7 @@ Job相关API路由
 实现核验工作(Job)相关的HTTP接口，包括创建、查询、状态管理等功能。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -14,7 +14,7 @@ from app.api.deps import (
 )
 from app.services.job_service import JobService
 from app.schemas.job import (
-    JobCreateRequest, JobCreateResponse, JobDetailResponse,
+    JobCreateRequest, JobCreateWithUploadRequest, JobCreateResponse, JobDetailResponse,
     JobListResponse, JobSummary, JobStatistics, JobTaskIdsResponse
 )
 from app.schemas.common import JobStatusEnum, SubmissionTypeEnum
@@ -62,6 +62,135 @@ async def create_job(
         
     except Exception as e:
         api_logger.error(f"创建Job失败: {e}")
+        raise handle_service_exception(e, "创建核验工作")
+
+
+@router.post("/jobs/upload", response_model=JobCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_job_with_upload(
+    user_id: str = Form(..., description="创建工作的用户ID"),
+    product_name: str = Form(..., description="产品名称"),
+    dialect: str = Form("ansi", description="SQLFluff方言"),
+    boc_batch_number: str = Form(None, description="BOC批次号"),
+    boc_task_number: str = Form(None, description="BOC任务号"),
+    sql_content: str = Form(None, description="单段SQL内容（与zip_file二选一）"),
+    zip_file: UploadFile = File(None, description="ZIP文件（与sql_content二选一）"),
+    job_service: JobService = Depends(get_job_service)
+):
+    """
+    创建新的核验工作（带文件上传）
+    
+    支持两种提交模式：
+    1. 单SQL文件：直接提交SQL内容
+    2. ZIP包：上传ZIP文件，系统会自动保存到NFS
+    
+    创建成功后会自动派发Celery任务进行处理。
+    """
+    try:
+        # 验证参数
+        if not sql_content and not zip_file:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="必须提供 sql_content 或 zip_file 其中之一"
+            )
+        
+        if sql_content and zip_file:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="sql_content 和 zip_file 不能同时提供"
+            )
+        
+        # 处理文件上传
+        zip_file_path = None
+        if zip_file:
+            # 验证文件类型
+            if not zip_file.filename.endswith('.zip'):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="文件必须是ZIP格式"
+                )
+            
+            # 验证文件大小（例如限制50MB）
+            file_content = await zip_file.read()
+            if len(file_content) > 50 * 1024 * 1024:  # 50MB
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="文件大小不能超过50MB"
+                )
+            
+            # 保存文件到NFS
+            try:
+                import uuid
+                import os
+                from app.config.settings import get_settings
+                
+                settings = get_settings()
+                nfs_root = settings.nfs_share_root_path
+                
+                # 生成唯一文件名
+                file_uuid = str(uuid.uuid4())
+                file_extension = os.path.splitext(zip_file.filename)[1]
+                unique_filename = f"{file_uuid}{file_extension}"
+                
+                # 创建上传目录
+                upload_dir = os.path.join(nfs_root, "uploads")
+                os.makedirs(upload_dir, exist_ok=True)
+                
+                # 完整文件路径
+                file_path = os.path.join(upload_dir, unique_filename)
+                
+                # 写入文件
+                with open(file_path, "wb") as f:
+                    f.write(file_content)
+                
+                # 设置相对路径
+                zip_file_path = f"uploads/{unique_filename}"
+                
+                api_logger.info(f"文件上传成功: {zip_file_path}")
+                
+            except Exception as e:
+                api_logger.error(f"文件上传失败: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"文件上传失败: {str(e)}"
+                )
+        
+        # 创建请求对象
+        request = JobCreateRequest(
+            sql_content=sql_content,
+            zip_file_path=zip_file_path,
+            dialect=dialect,
+            user_id=user_id,
+            product_name=product_name,
+            boc_batch_number=boc_batch_number,
+            boc_task_number=boc_task_number
+        )
+        
+        api_logger.info(f"创建Job请求（带上传）: {request.dict()}")
+        
+        # 调用业务服务创建Job
+        response = await job_service.create_job(request)
+        
+        # 派发Celery任务进行后台处理
+        try:
+            from app.celery_app.tasks import expand_zip_and_dispatch_tasks
+            
+            # 对于单SQL文件和ZIP包，都派发expand_zip_and_dispatch_tasks任务
+            # 该任务会根据Job类型进行相应的处理
+            task_result = expand_zip_and_dispatch_tasks.delay(response.job_id)
+            api_logger.info(f"派发任务处理: {task_result.id}")
+                
+        except Exception as e:
+            api_logger.error(f"任务派发失败: {e}")
+            # 注意：即使任务派发失败，Job已经创建，所以仍然返回成功
+            # 用户可以稍后重试或通过其他方式处理
+        
+        api_logger.info(f"Job创建成功（带上传）: {response.job_id}")
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"创建Job失败（带上传）: {e}")
         raise handle_service_exception(e, "创建核验工作")
 
 
