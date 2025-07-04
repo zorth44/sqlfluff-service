@@ -16,7 +16,8 @@ from app.api.deps import (
 from app.services.task_service import TaskService
 from app.schemas.task import (
     TaskDetailResponse, TaskResultContent, TaskListResponse,
-    TaskStatistics, TaskRetryRequest, TaskRetryResponse
+    TaskStatistics, TaskRetryRequest, TaskRetryResponse,
+    TaskLintResultResponse
 )
 from app.schemas.common import TaskStatusEnum
 from app.core.logging import api_logger
@@ -120,6 +121,67 @@ async def get_task_result(
     except Exception as e:
         api_logger.error(f"获取Task结果失败: {task_id}, 错误: {e}")
         raise handle_service_exception(e, "获取任务结果")
+
+
+@router.get("/tasks/result/lint", response_model=TaskLintResultResponse)
+async def get_task_lint_result(
+    task_id: str = Query(..., description="任务ID"),
+    task_service: TaskService = Depends(get_task_service)
+):
+    """
+    获取单个文件任务的Lint结果（只包含violations和SQL行内容）
+    
+    返回SQLFluff分析的违规项列表，每个违规项都包含对应的SQL行内容。
+    只有状态为SUCCESS的任务才能获取结果。
+    """
+    try:
+        # 验证task_id格式
+        task_id = validate_task_id(task_id)
+        
+        api_logger.info(f"获取Task Lint结果: {task_id}")
+        
+        # 首先检查任务状态
+        task = await task_service.get_task_by_id(task_id)
+        if not task:
+            api_logger.warning(f"Task不存在: {task_id}")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"任务不存在: {task_id}"
+            )
+        
+        # 检查任务状态
+        if task.status != TaskStatusEnum.SUCCESS:
+            api_logger.warning(f"Task结果未准备就绪: {task_id}, 状态: {task.status}")
+            
+            if task.status == TaskStatusEnum.FAILURE:
+                error_msg = f"任务执行失败: {task.error_message or '未知错误'}"
+            elif task.status in [TaskStatusEnum.PENDING, TaskStatusEnum.IN_PROGRESS]:
+                error_msg = "任务还在处理中，请稍后再试"
+            else:
+                error_msg = f"任务状态异常: {task.status}"
+            
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=error_msg
+            )
+        
+        # 获取Lint结果
+        result = await task_service.get_task_lint_result(task_id)
+        if result is None:
+            api_logger.error(f"Task Lint结果文件不存在: {task_id}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="结果文件不存在或读取失败"
+            )
+        
+        api_logger.debug(f"Task Lint结果获取成功: {task_id}, 违规项数量: {len(result.violations)}")
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"获取Task Lint结果失败: {task_id}, 错误: {e}")
+        raise handle_service_exception(e, "获取任务Lint结果")
 
 
 @router.get("/tasks/result/download")

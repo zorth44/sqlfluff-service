@@ -129,6 +129,55 @@ class TaskResultContent(BaseModel):
         }
 
 
+class TaskViolationWithSQL(BaseModel):
+    """带SQL行内容的违规项模型"""
+    line_no: int = Field(description="违规行号")
+    line_pos: int = Field(description="违规位置")
+    code: str = Field(description="违规代码")
+    description: str = Field(description="违规描述")
+    rule: str = Field(description="违规规则")
+    severity: str = Field(description="严重程度")
+    fixable: bool = Field(description="是否可修复")
+    sql_line: str = Field(description="对应的SQL行内容")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "line_no": 8,
+                "line_pos": 8,
+                "code": "RF02",
+                "description": "Unqualified reference 'product5' found in select with more than one referenced table/view.",
+                "rule": "references.qualification",
+                "severity": "warning",
+                "fixable": False,
+                "sql_line": "SELECT product5.name, category.name FROM products product5 JOIN categories category ON product5.category_id = category.id;"
+            }
+        }
+
+
+class TaskLintResultResponse(BaseModel):
+    """任务Lint结果响应模型（只包含violations和SQL行内容）"""
+    violations: List[TaskViolationWithSQL] = Field(description="带SQL行内容的违规项列表")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "violations": [
+                    {
+                        "line_no": 8,
+                        "line_pos": 8,
+                        "code": "RF02",
+                        "description": "Unqualified reference 'product5' found in select with more than one referenced table/view.",
+                        "rule": "references.qualification",
+                        "severity": "warning",
+                        "fixable": False,
+                        "sql_line": "SELECT product5.name, category.name FROM products product5 JOIN categories category ON product5.category_id = category.id;"
+                    }
+                ]
+            }
+        }
+
+
 class TaskStatusUpdateRequest(BaseModel):
     """任务状态更新请求模型（内部使用）"""
     status: TaskStatusEnum = Field(description="新状态")
