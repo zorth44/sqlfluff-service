@@ -59,8 +59,8 @@ check_env_vars() {
     fi
     
     # 构建数据库URL
-    export DATABASE_URL="mysql+aiomysql://${MYSQL_DATABASE_USERNAME}:${MYSQL_DATABASE_PASSWORD}@${MYSQL_DATABASE_HOST}:${MYSQL_DATABASE_PORT}/${MYSQL_DATABASE_NAME}"
-    log_info "数据库URL已构建: mysql+aiomysql://${MYSQL_DATABASE_USERNAME}:***@${MYSQL_DATABASE_HOST}:${MYSQL_DATABASE_PORT}/${MYSQL_DATABASE_NAME}"
+    export DATABASE_URL="mysql+pymysql://${MYSQL_DATABASE_USERNAME}:${MYSQL_DATABASE_PASSWORD}@${MYSQL_DATABASE_HOST}:${MYSQL_DATABASE_PORT}/${MYSQL_DATABASE_NAME}"
+    log_info "数据库URL已构建: mysql+pymysql://${MYSQL_DATABASE_USERNAME}:***@${MYSQL_DATABASE_HOST}:${MYSQL_DATABASE_PORT}/${MYSQL_DATABASE_NAME}"
     
     # 设置Consul配置
     if [[ -n "$CONSUL_URL" ]]; then
@@ -78,16 +78,27 @@ check_database() {
     # 使用Python检查数据库连接
     python3 -c "
 import sys
+import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 try:
-    engine = create_engine('$DATABASE_URL')
+    # 从环境变量获取数据库URL
+    database_url = os.getenv('DATABASE_URL')
+    if not database_url:
+        print('DATABASE_URL environment variable is not set')
+        sys.exit(1)
+    
+    print(f'Testing connection to database...')
+    engine = create_engine(database_url)
     with engine.connect() as conn:
         conn.execute(text('SELECT 1'))
     print('Database connection successful')
 except SQLAlchemyError as e:
     print(f'Database connection failed: {e}')
+    sys.exit(1)
+except Exception as e:
+    print(f'Unexpected error: {e}')
     sys.exit(1)
 "
     

@@ -5,7 +5,7 @@
 包含表结构、关系、索引和约束定义。
 """
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Enum, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, Text, DateTime, Enum, ForeignKey, Index, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -89,6 +89,12 @@ class LintingJob(Base):
         comment="BOC任务号"
     )
     
+    rules = Column(
+        JSON,
+        nullable=True,
+        comment="用户指定的SQLFluff规则列表，如['RF02', 'L032']"
+    )
+    
     error_message = Column(
         Text,
         nullable=True,
@@ -135,6 +141,7 @@ class LintingJob(Base):
             'product_name': self.product_name,
             'boc_batch_number': self.boc_batch_number,
             'boc_task_number': self.boc_task_number,
+            'rules': self.rules,
             'error_message': self.error_message,
             'created_at': self.created_at,
             'updated_at': self.updated_at

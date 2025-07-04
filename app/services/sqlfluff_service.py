@@ -6,7 +6,7 @@ SQLFluff集成服务
 """
 
 import sqlfluff
-from sqlfluff.core import Linter
+from sqlfluff.core import Linter, FluffConfig
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import os
@@ -105,11 +105,23 @@ class SQLFluffService:
                             should_exclude = True
                 
                 # 方法3: 基于规则代码的特殊处理（针对已知的自定义规则）
+                # 注意：HiveCustom规则实际上可以在多种方言中工作，不应该强制限制为hive方言
+                # 只有在规则明确指定方言限制时才排除
                 if not should_exclude and 'HiveCustom' in rule.code:
-                    # HiveCustom规则只应该在hive方言中应用
-                    if current_dialect != 'hive':
-                        should_exclude = True
-                        self.logger.debug(f"基于规则代码排除规则: {rule.code} (当前方言: {current_dialect})")
+                    # 检查规则是否有明确的方言限制
+                    has_dialect_restriction = False
+                    if hasattr(rule, '_rule_class'):
+                        rule_class = rule._rule_class
+                        if hasattr(rule_class, 'dialects') and rule_class.dialects:
+                            has_dialect_restriction = True
+                    elif hasattr(rule, 'dialects') and rule.dialects:
+                        has_dialect_restriction = True
+                    
+                    # 只有在明确限制方言且当前方言不在其中时才排除
+                    if has_dialect_restriction:
+                        self.logger.debug(f"HiveCustom规则 {rule.code} 有方言限制，检查是否排除")
+                    else:
+                        self.logger.debug(f"HiveCustom规则 {rule.code} 无方言限制，保留在 {current_dialect} 方言中")
                 
                 if should_exclude:
                     rules_to_exclude.append(rule.code)
@@ -136,13 +148,14 @@ class SQLFluffService:
             self.logger.warning(f"规则过滤失败，使用原始linter: {e}")
             return linter
     
-    def analyze_sql_file(self, file_path: str, dialect: Optional[str] = None) -> Dict[str, Any]:
+    def analyze_sql_file(self, file_path: str, dialect: Optional[str] = None, rules: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         分析单个SQL文件
         
         Args:
             file_path: SQL文件路径（可以是相对路径或绝对路径）
             dialect: SQL方言，如果为None则使用默认方言
+            rules: 要应用的规则列表，如果为None则使用默认规则
             
         Returns:
             Dict[str, Any]: 分析结果
@@ -170,7 +183,7 @@ class SQLFluffService:
             file_info = self._get_file_info(relative_path)
             
             # 执行分析
-            result = self.analyze_sql_content(sql_content, os.path.basename(file_path), dialect)
+            result = self.analyze_sql_content(sql_content, os.path.basename(file_path), dialect, rules)
             
             # 更新文件信息
             result['file_info'].update(file_info)
@@ -184,7 +197,7 @@ class SQLFluffService:
                 raise
             raise SQLFluffException("分析SQL文件", file_path, str(e))
     
-    def analyze_sql_content(self, sql_content: str, file_name: str = "query.sql", dialect: Optional[str] = None) -> Dict[str, Any]:
+    def analyze_sql_content(self, sql_content: str, file_name: str = "query.sql", dialect: Optional[str] = None, rules: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         分析SQL内容字符串
         
@@ -192,6 +205,7 @@ class SQLFluffService:
             sql_content: SQL内容
             file_name: 文件名（用于结果中显示）
             dialect: SQL方言，如果为None则使用默认方言
+            rules: 要应用的规则列表，如果为None则使用默认规则
             
         Returns:
             Dict[str, Any]: 分析结果
@@ -202,7 +216,12 @@ class SQLFluffService:
             used_dialect = dialect or self.default_dialect
             
             # 执行Linting
-            lint_result = linter.lint_string(sql_content)
+            if rules:
+                # 使用overrides参数来设置规则和方言
+                config = FluffConfig(overrides={"rules": rules, "dialect": used_dialect})
+                lint_result = linter.lint_string(sql_content, config=config)
+            else:
+                lint_result = linter.lint_string(sql_content)
             
             # 获取解析树 - 优先从linter结果中获取，fallback到直接解析
             parse_tree = None
@@ -391,24 +410,57 @@ class SQLFluffService:
             # 需要找到其中的SQLLintError列表
             lint_errors = []
             
-            # 遍历lint_result，找到SQLLintError对象
-            for item in lint_result:
-                # 检查是否是SQLLintError对象列表
-                if isinstance(item, list):
-                    for sub_item in item:
-                        if hasattr(sub_item, 'line_no') and hasattr(sub_item, 'description'):
-                            lint_errors.append(sub_item)
-                # 检查是否是单个SQLLintError对象
-                elif hasattr(item, 'line_no') and hasattr(item, 'description'):
-                    lint_errors.append(item)
-                # 记录调试信息
-                else:
-                    self.logger.debug(f"跳过非违规项: {type(item)} - {item}")
+            # 调试：记录lint_result的类型和结构
+            self.logger.debug(f"lint_result类型: {type(lint_result)}")
+            self.logger.debug(f"lint_result长度: {len(lint_result) if hasattr(lint_result, '__len__') else 'N/A'}")
+            
+            # 方法1: 直接尝试获取violations属性（SQLFluff 3.x版本）
+            if hasattr(lint_result, 'violations'):
+                lint_errors = lint_result.violations
+                self.logger.debug(f"从lint_result.violations获取到 {len(lint_errors)} 个违规项")
+            
+            # 方法2: 如果方法1失败，尝试遍历lint_result
+            if not lint_errors:
+                for item in lint_result:
+                    self.logger.debug(f"处理lint_result项: {type(item)} - {item}")
+                    
+                    # 检查是否是SQLLintError对象列表
+                    if isinstance(item, list):
+                        for sub_item in item:
+                            if hasattr(sub_item, 'line_no') and hasattr(sub_item, 'description'):
+                                lint_errors.append(sub_item)
+                                self.logger.debug(f"从列表中提取违规项: {sub_item}")
+                    # 检查是否是单个SQLLintError对象
+                    elif hasattr(item, 'line_no') and hasattr(item, 'description'):
+                        lint_errors.append(item)
+                        self.logger.debug(f"直接提取违规项: {item}")
+                    # 检查是否是文件结果对象（包含violations）
+                    elif hasattr(item, 'violations'):
+                        lint_errors.extend(item.violations)
+                        self.logger.debug(f"从文件结果中提取 {len(item.violations)} 个违规项")
+                    # 记录调试信息
+                    else:
+                        self.logger.debug(f"跳过非违规项: {type(item)} - {item}")
+            
+            # 方法3: 尝试使用SQLFluff的API方法获取违规项
+            if not lint_errors and hasattr(lint_result, 'get_violations'):
+                try:
+                    lint_errors = lint_result.get_violations()
+                    self.logger.debug(f"使用get_violations方法获取到 {len(lint_errors)} 个违规项")
+                except Exception as e:
+                    self.logger.debug(f"get_violations方法失败: {e}")
             
             # 如果没有找到SQLLintError，记录原始数据用于调试
             if not lint_errors:
                 self.logger.warning(f"未找到SQLLintError对象，原始数据类型: {[type(item) for item in lint_result]}")
                 self.logger.debug(f"原始lint_result内容: {lint_result}")
+                
+                # 尝试最后的方法：直接检查lint_result是否就是违规项列表
+                if hasattr(lint_result, '__iter__') and not isinstance(lint_result, str):
+                    for item in lint_result:
+                        if hasattr(item, 'line_no') and hasattr(item, 'description'):
+                            lint_errors.append(item)
+                            self.logger.debug(f"最后尝试：直接提取违规项: {item}")
             
             # 处理找到的违规项
             for violation in lint_errors:
@@ -417,11 +469,36 @@ class SQLFluffService:
                     rule_code = "UNKNOWN"
                     rule_name = "unknown"
                     
+                    # 方法1: 从violation.rule获取
                     if hasattr(violation, 'rule') and violation.rule:
                         if hasattr(violation.rule, 'code'):
                             rule_code = violation.rule.code
                         if hasattr(violation.rule, 'name'):
                             rule_name = violation.rule.name
+                    
+                    # 方法2: 从violation.code获取（某些版本）
+                    if rule_code == "UNKNOWN" and hasattr(violation, 'code'):
+                        rule_code = violation.code
+                    
+                    # 方法3: 从description中提取规则代码（备用方法）
+                    if rule_code == "UNKNOWN" and hasattr(violation, 'description'):
+                        description = violation.description
+                        import re
+                        code_match = re.search(r'([A-Z][A-Z0-9_]+)', description)
+                        if code_match:
+                            rule_code = code_match.group(1)
+                            self.logger.debug(f"从描述中提取规则代码: {rule_code}")
+                    
+                    # 方法4: 从rule_name获取（某些版本）
+                    if rule_name == "unknown" and hasattr(violation, 'rule_name'):
+                        rule_name = violation.rule_name
+                    
+                    # 微调：如果是语法错误，强制code为PRS
+                    if hasattr(violation, 'description'):
+                        desc = violation.description.lower()
+                        if 'unparsable' in desc or 'found unparsable' in desc:
+                            rule_code = 'PRS'
+                            self.logger.debug(f"语法错误违规项，强制规则代码为PRS: {violation.description}")
                     
                     violation_dict = {
                         "line_no": getattr(violation, 'line_no', 0),
@@ -434,6 +511,7 @@ class SQLFluffService:
                     }
                     
                     violations.append(violation_dict)
+                    self.logger.debug(f"添加违规项: {violation_dict}")
                     
                     # 统计严重程度
                     if violation_dict["severity"] == "critical":
@@ -524,14 +602,41 @@ class SQLFluffService:
     def _get_violation_severity(self, violation) -> str:
         """获取违规项严重程度"""
         try:
-            # 根据规则代码判断严重程度
+            # 方法1: 从violation.rule获取规则代码
+            rule_code = "UNKNOWN"
             if hasattr(violation, 'rule') and violation.rule:
-                rule_code = violation.rule.code
-                
-                # 关键错误（影响SQL执行）
-                critical_rules = ['L001', 'L002', 'L003', 'L008', 'L009']
-                if rule_code in critical_rules:
-                    return "critical"
+                if hasattr(violation.rule, 'code'):
+                    rule_code = violation.rule.code
+            
+            # 方法2: 从violation.code获取（某些版本）
+            if rule_code == "UNKNOWN" and hasattr(violation, 'code'):
+                rule_code = violation.code
+            
+            # 方法3: 从description中提取规则代码
+            if rule_code == "UNKNOWN" and hasattr(violation, 'description'):
+                description = violation.description
+                import re
+                code_match = re.search(r'([A-Z][A-Z0-9_]+)', description)
+                if code_match:
+                    rule_code = code_match.group(1)
+            
+            # 判断严重程度
+            # 语法错误（PRS）是严重错误
+            if rule_code == "PRS":
+                return "critical"
+            
+            # 解析错误（unparsable）是严重错误
+            if hasattr(violation, 'description') and "unparsable" in violation.description.lower():
+                return "critical"
+            
+            # 关键错误（影响SQL执行）
+            critical_rules = ['L001', 'L002', 'L003', 'L008', 'L009']
+            if rule_code in critical_rules:
+                return "critical"
+            
+            # 自定义规则通常是警告
+            if 'Custom' in rule_code:
+                return "warning"
             
             # 默认为警告
             return "warning"

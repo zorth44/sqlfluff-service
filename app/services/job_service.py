@@ -69,7 +69,8 @@ class JobService:
                 user_id=request.user_id,
                 product_name=request.product_name,
                 boc_batch_number=request.boc_batch_number,
-                boc_task_number=request.boc_task_number
+                boc_task_number=request.boc_task_number,
+                rules=request.rules
             )
             
             self.db.add(job)
@@ -82,6 +83,9 @@ class JobService:
                 await self._create_zip_archive_tasks(job_id, source_path)
             
             self.db.commit()
+            
+            # 确保事务提交后数据立即可见
+            self.db.flush()
             
             self.logger.info(f"Job创建成功: {job_id}, 类型: {submission_type}")
             return JobCreateResponse(job_id=job_id)
@@ -132,30 +136,28 @@ class JobService:
             
             # 获取Task分页数据
             total_tasks = job.tasks.count()
-            tasks = job.tasks.offset((page - 1) * size).limit(size).all()
+            tasks_query = job.tasks.order_by(LintingTask.created_at.asc())
+            tasks = tasks_query.offset((page - 1) * size).limit(size).all()
             
             # 构造Task摘要列表
-            task_summaries = []
-            for task in tasks:
-                task_summaries.append(TaskSummary(
-                    task_id=task.task_id,
-                    file_name=task.file_name,
-                    status=task.status,
-                    result_file_path=task.result_file_path,
-                    error_message=task.error_message,
-                    created_at=task.created_at,
-                    updated_at=task.updated_at
-                ))
+            task_summaries = [TaskSummary(
+                task_id=task.task_id,
+                file_name=task.file_name,
+                status=task.status,
+                result_file_path=task.result_file_path,
+                error_message=task.error_message,
+                created_at=task.created_at,
+                updated_at=task.updated_at
+            ) for task in tasks]
             
             # 构造分页响应
-            pages = (total_tasks + size - 1) // size
             pagination_response = PaginationResponse[TaskSummary](
                 items=task_summaries,
                 total=total_tasks,
                 page=page,
                 size=size,
-                pages=pages,
-                has_next=page < pages,
+                pages=(total_tasks + size - 1) // size,
+                has_next=page < ((total_tasks + size - 1) // size),
                 has_prev=page > 1
             )
             
@@ -170,6 +172,7 @@ class JobService:
                 product_name=job.product_name,
                 boc_batch_number=job.boc_batch_number,
                 boc_task_number=job.boc_task_number,
+                rules=job.rules,
                 created_at=job.created_at,
                 updated_at=job.updated_at,
                 error_message=job.error_message,
@@ -406,6 +409,7 @@ class JobService:
                     product_name=job.product_name,
                     boc_batch_number=job.boc_batch_number,
                     boc_task_number=job.boc_task_number,
+                    rules=job.rules,
                     created_at=job.created_at,
                     updated_at=job.updated_at,
                     task_count=job.get_task_count(),

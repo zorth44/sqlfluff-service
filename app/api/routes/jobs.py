@@ -6,7 +6,7 @@ Job相关API路由
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, List
 
 from app.api.deps import (
     get_job_service, validate_job_id, get_pagination_params,
@@ -74,6 +74,7 @@ async def create_job_with_upload(
     boc_task_number: str = Form(None, description="BOC任务号"),
     sql_content: str = Form(None, description="单段SQL内容（与zip_file二选一）"),
     zip_file: UploadFile = File(None, description="ZIP文件（与sql_content二选一）"),
+    rules: Optional[str] = Form(None, description="SQLFluff规则列表，逗号分隔，如RF02,L032"),
     job_service: JobService = Depends(get_job_service)
 ):
     """
@@ -124,7 +125,7 @@ async def create_job_with_upload(
                 from app.config.settings import get_settings
                 
                 settings = get_settings()
-                nfs_root = settings.nfs_share_root_path
+                nfs_root = settings.NFS_SHARE_ROOT_PATH
                 
                 # 生成唯一文件名
                 file_uuid = str(uuid.uuid4())
@@ -154,6 +155,12 @@ async def create_job_with_upload(
                     detail=f"文件上传失败: {str(e)}"
                 )
         
+        # 处理rules参数
+        rules_list: Optional[List[str]] = None
+        if rules:
+            rules_list = [r.strip().upper() for r in rules.split(',') if r.strip()]
+            if not rules_list:
+                rules_list = None
         # 创建请求对象
         request = JobCreateRequest(
             sql_content=sql_content,
@@ -162,7 +169,8 @@ async def create_job_with_upload(
             user_id=user_id,
             product_name=product_name,
             boc_batch_number=boc_batch_number,
-            boc_task_number=boc_task_number
+            boc_task_number=boc_task_number,
+            rules=rules_list
         )
         
         api_logger.info(f"创建Job请求（带上传）: {request.dict()}")

@@ -145,7 +145,7 @@ class Settings(BaseSettings):
             self.MYSQL_DATABASE_PASSWORD,
             self.MYSQL_DATABASE_NAME
         ]):
-            return f"mysql+aiomysql://{self.MYSQL_DATABASE_USERNAME}:{self.MYSQL_DATABASE_PASSWORD}@{self.MYSQL_DATABASE_HOST}:{self.MYSQL_DATABASE_PORT}/{self.MYSQL_DATABASE_NAME}"
+            return f"mysql+pymysql://{self.MYSQL_DATABASE_USERNAME}:{self.MYSQL_DATABASE_PASSWORD}@{self.MYSQL_DATABASE_HOST}:{self.MYSQL_DATABASE_PORT}/{self.MYSQL_DATABASE_NAME}"
         
         # 如果两种配置都没有提供，返回默认值或抛出错误
         raise ValueError("Database configuration is incomplete. Please provide either DATABASE_URL or all MySQL database configuration variables.")

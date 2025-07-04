@@ -125,10 +125,49 @@ def expand_zip_and_dispatch_tasks(self, job_id: str):
         with task_lock(f"expand_zip_{job_id}"):
             service_logger.info(f"Starting job processing for job: {job_id}")
             
-            # 获取Job信息
-            job = db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+            # 获取Job信息 - 添加重试机制处理事务隔离问题
+            job = None
+            retry_count = 0
+            max_db_retries = 3
+            
+            while job is None and retry_count < max_db_retries:
+                try:
+                    job = db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+                    if job is None:
+                        retry_count += 1
+                        if retry_count < max_db_retries:
+                            service_logger.warning(f"Job not found, retrying in 2 seconds (attempt {retry_count}/{max_db_retries}): {job_id}")
+                            import time
+                            time.sleep(2)  # 等待2秒让事务提交
+                            # 刷新数据库会话
+                            db.close()
+                            db = SessionLocal()
+                        else:
+                            raise JobException(ErrorCode.JOB_NOT_FOUND, job_id, f"Job not found after {max_db_retries} retries: {job_id}")
+                except Exception as e:
+                    retry_count += 1
+                    if retry_count < max_db_retries:
+                        service_logger.warning(f"Database error, retrying in 2 seconds (attempt {retry_count}/{max_db_retries}): {e}")
+                        import time
+                        time.sleep(2)
+                        db.close()
+                        db = SessionLocal()
+                    else:
+                        raise
+            
             if not job:
                 raise JobException(ErrorCode.JOB_NOT_FOUND, job_id, f"Job not found: {job_id}")
+            
+            service_logger.info(f"Successfully found job: {job_id}, status: {job.status}")
+            
+            # 检查Job状态，避免重复处理
+            if job.status == JobStatusEnum.PROCESSING:
+                service_logger.info(f"Job {job_id} is already being processed, skipping")
+                return {
+                    "status": "skipped",
+                    "job_id": job_id,
+                    "reason": "Job already in processing state"
+                }
             
             # 更新Job状态为PROCESSING
             job.status = JobStatusEnum.PROCESSING
@@ -339,10 +378,9 @@ def process_sql_file(self, task_id: str):
             
             # 使用SQLFluff分析SQL文件
             sqlfluff_service = SQLFluffService()
-            service_logger.info(f"Analyzing SQL file with SQLFluff: {sql_file_path}, dialect: {job.dialect}")
-            
-            # 传递相对路径和方言给SQLFluffService
-            analysis_result = sqlfluff_service.analyze_sql_file(task.source_file_path, job.dialect)
+            service_logger.info(f"Analyzing SQL file with SQLFluff: {sql_file_path}, dialect: {job.dialect}, rules: {job.rules}")
+            # 传递相对路径、方言和规则给SQLFluffService
+            analysis_result = sqlfluff_service.analyze_sql_file(task.source_file_path, job.dialect, job.rules)
             
             # 生成结果文件路径
             result_relative_path = f"results/{task.job_id}/{task_id}_result.json"

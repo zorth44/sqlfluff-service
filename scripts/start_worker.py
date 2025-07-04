@@ -62,9 +62,9 @@ def check_environment() -> bool:
     port = os.getenv('MYSQL_DATABASE_PORT')
     database = os.getenv('MYSQL_DATABASE_NAME')
     
-    database_url = f"mysql+aiomysql://{username}:{password}@{host}:{port}/{database}"
+    database_url = f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}"
     os.environ['DATABASE_URL'] = database_url
-    print(f"✅ Database URL constructed: mysql+aiomysql://{username}:***@{host}:{port}/{database}")
+    print(f"✅ Database URL constructed: mysql+pymysql://{username}:***@{host}:{port}/{database}")
     
     # 设置Consul配置
     consul_url = os.getenv('CONSUL_URL')

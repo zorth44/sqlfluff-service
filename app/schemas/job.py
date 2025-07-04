@@ -48,6 +48,11 @@ class JobCreateRequest(BaseModel):
         description="BOC任务号"
     )
     
+    rules: Optional[List[str]] = Field(
+        default=None,
+        description="SQLFluff规则列表，如['RF02', 'L032']，如果为空则使用默认规则"
+    )
+    
     @model_validator(mode='after')
     def validate_request(self):
         """验证请求参数"""
@@ -158,6 +163,26 @@ class JobCreateRequest(BaseModel):
                 raise ValueError("BOC任务号不能超过255字符")
         return v
 
+    @validator('rules')
+    def validate_rules(cls, v):
+        """验证SQLFluff规则列表"""
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError("rules必须是列表格式")
+            for rule in v:
+                if not isinstance(rule, str):
+                    raise ValueError("规则代码必须是字符串")
+                rule = rule.strip().upper()
+                if not rule:
+                    raise ValueError("规则代码不能为空")
+                import re
+                if not re.match(r'^[A-Z][A-Z0-9_]*$', rule):
+                    raise ValueError(f"无效的规则代码格式: {rule}")
+            v = sorted(list(set(v)))
+            if len(v) > 100:
+                raise ValueError("规则数量不能超过100个")
+        return v
+
 
 class JobCreateWithUploadRequest(BaseModel):
     """创建核验工作请求模型（带文件上传）"""
@@ -182,6 +207,11 @@ class JobCreateWithUploadRequest(BaseModel):
     boc_task_number: Optional[str] = Field(
         default=None,
         description="BOC任务号"
+    )
+    
+    rules: Optional[List[str]] = Field(
+        default=None,
+        description="SQLFluff规则列表，如['RF02', 'L032']，如果为空则使用默认规则"
     )
     
     @validator('sql_content')
@@ -265,6 +295,26 @@ class JobCreateWithUploadRequest(BaseModel):
                 raise ValueError("BOC任务号不能超过255字符")
         return v
 
+    @validator('rules')
+    def validate_rules(cls, v):
+        """验证SQLFluff规则列表"""
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError("rules必须是列表格式")
+            for rule in v:
+                if not isinstance(rule, str):
+                    raise ValueError("规则代码必须是字符串")
+                rule = rule.strip().upper()
+                if not rule:
+                    raise ValueError("规则代码不能为空")
+                import re
+                if not re.match(r'^[A-Z][A-Z0-9_]*$', rule):
+                    raise ValueError(f"无效的规则代码格式: {rule}")
+            v = sorted(list(set(v)))
+            if len(v) > 100:
+                raise ValueError("规则数量不能超过100个")
+        return v
+
 
 class JobCreateResponse(BaseModel):
     """创建核验工作响应模型"""
@@ -289,6 +339,7 @@ class JobSummary(BaseModel):
     product_name: str = Field(description="产品名称")
     boc_batch_number: Optional[str] = Field(default=None, description="BOC批次号")
     boc_task_number: Optional[str] = Field(default=None, description="BOC任务号")
+    rules: Optional[List[str]] = Field(default=None, description="SQLFluff规则列表")
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="最后更新时间")
     task_count: int = Field(description="任务总数")
@@ -355,6 +406,7 @@ class JobDetailResponse(BaseModel):
     product_name: str = Field(description="产品名称")
     boc_batch_number: Optional[str] = Field(default=None, description="BOC批次号")
     boc_task_number: Optional[str] = Field(default=None, description="BOC任务号")
+    rules: Optional[List[str]] = Field(default=None, description="SQLFluff规则列表")
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="最后更新时间")
     error_message: Optional[str] = Field(default=None, description="错误消息")

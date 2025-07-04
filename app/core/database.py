@@ -36,10 +36,13 @@ engine = create_engine(
         "connect_timeout": 60,
         "read_timeout": 60,
         "write_timeout": 60,
+        "autocommit": False,  # 确保事务控制
     },
     # 日志配置
     echo=settings.DEBUG,
     echo_pool=settings.DEBUG,
+    # 事务隔离级别 - 使用READ_COMMITTED避免幻读问题
+    isolation_level="READ_COMMITTED",
 )
 
 # 会话工厂
@@ -125,8 +128,19 @@ def close_database_connections():
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     """数据库连接建立时的配置"""
-    # 对于MySQL，可以在这里设置会话级别的配置
-    pass
+    # 对于MySQL，设置会话级别的配置
+    try:
+        cursor = dbapi_connection.cursor()
+        # 设置事务隔离级别为READ_COMMITTED
+        cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        # 设置自动提交为OFF
+        cursor.execute("SET SESSION autocommit = 0")
+        # 设置SQL模式
+        cursor.execute("SET SESSION sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE,ERROR_FOR_DIVISION_BY_ZERO'")
+        cursor.close()
+        logger.debug("MySQL会话配置已设置")
+    except Exception as e:
+        logger.warning(f"设置MySQL会话配置失败: {e}")
 
 
 @event.listens_for(engine, "checkout")
