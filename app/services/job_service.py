@@ -434,6 +434,115 @@ class JobService:
             self.logger.error(f"获取Job列表失败: {e}")
             raise JobException(ErrorCode.DATABASE_QUERY_ERROR, "all", str(e))
     
+    async def search_jobs(self, page: int = 1, size: int = 10,
+                         user_id: Optional[str] = None,
+                         product_name: Optional[str] = None,
+                         boc_batch_number: Optional[str] = None,
+                         boc_task_number: Optional[str] = None,
+                         status: Optional[JobStatusEnum] = None,
+                         submission_type: Optional[SubmissionTypeEnum] = None,
+                         dialect: Optional[str] = None,
+                         start_date: Optional[datetime] = None,
+                         end_date: Optional[datetime] = None,
+                         sort_by: str = "created_at",
+                         sort_order: str = "desc") -> PaginationResponse[JobSummary]:
+        """
+        高级搜索Job列表（分页）
+        
+        Args:
+            page: 页码
+            size: 每页大小
+            user_id: 用户ID（支持模糊搜索）
+            product_name: 产品名称（支持模糊搜索）
+            boc_batch_number: BOC批次号（支持模糊搜索）
+            boc_task_number: BOC任务号（支持模糊搜索）
+            status: 状态过滤
+            submission_type: 提交类型过滤
+            dialect: SQLFluff方言
+            start_date: 开始日期
+            end_date: 结束日期
+            sort_by: 排序字段
+            sort_order: 排序方向（asc/desc）
+            
+        Returns:
+            PaginationResponse[JobSummary]: 分页的Job摘要列表
+        """
+        try:
+            query = self.db.query(LintingJob)
+            
+            # 应用模糊搜索条件
+            if user_id:
+                query = query.filter(LintingJob.user_id.ilike(f"%{user_id}%"))
+            if product_name:
+                query = query.filter(LintingJob.product_name.ilike(f"%{product_name}%"))
+            if boc_batch_number:
+                query = query.filter(LintingJob.boc_batch_number.ilike(f"%{boc_batch_number}%"))
+            if boc_task_number:
+                query = query.filter(LintingJob.boc_task_number.ilike(f"%{boc_task_number}%"))
+            
+            # 应用精确匹配条件
+            if status:
+                query = query.filter(LintingJob.status == status)
+            if submission_type:
+                query = query.filter(LintingJob.submission_type == submission_type)
+            if dialect:
+                query = query.filter(LintingJob.dialect == dialect)
+            
+            # 应用日期范围过滤
+            if start_date:
+                query = query.filter(LintingJob.created_at >= start_date)
+            if end_date:
+                query = query.filter(LintingJob.created_at <= end_date)
+            
+            # 排序
+            sort_column = getattr(LintingJob, sort_by, LintingJob.created_at)
+            if sort_order.lower() == "asc":
+                query = query.order_by(sort_column.asc())
+            else:
+                query = query.order_by(sort_column.desc())
+            
+            # 分页
+            total = query.count()
+            jobs = query.offset((page - 1) * size).limit(size).all()
+            
+            # 构造摘要列表
+            job_summaries = []
+            for job in jobs:
+                job_summaries.append(JobSummary(
+                    job_id=job.job_id,
+                    status=job.status,
+                    submission_type=job.submission_type,
+                    source_path=job.source_path,
+                    dialect=job.dialect,
+                    user_id=job.user_id,
+                    product_name=job.product_name,
+                    boc_batch_number=job.boc_batch_number,
+                    boc_task_number=job.boc_task_number,
+                    rules=job.rules,
+                    created_at=job.created_at,
+                    updated_at=job.updated_at,
+                    task_count=job.get_task_count(),
+                    successful_tasks=job.get_successful_task_count(),
+                    failed_tasks=job.get_failed_task_count(),
+                    error_message=job.error_message
+                ))
+            
+            # 构造分页响应
+            pages = (total + size - 1) // size
+            return PaginationResponse[JobSummary](
+                items=job_summaries,
+                total=total,
+                page=page,
+                size=size,
+                pages=pages,
+                has_next=page < pages,
+                has_prev=page > 1
+            )
+            
+        except Exception as e:
+            self.logger.error(f"搜索Job列表失败: {e}")
+            raise JobException(ErrorCode.DATABASE_QUERY_ERROR, "all", str(e))
+    
     # 私有方法
     
     async def _save_single_sql_content(self, job_id: str, sql_content: str) -> str:

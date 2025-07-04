@@ -457,10 +457,36 @@ class JobQueryParams(BaseQueryParams, DateRangeParams):
     
     @validator('sort_by')
     def validate_job_sort_by(cls, v):
-        """验证Job排序字段"""
-        allowed_fields = ['created_at', 'updated_at', 'status', 'submission_type']
-        if v and v not in allowed_fields:
-            raise ValueError(f'排序字段必须是以下之一: {", ".join(allowed_fields)}')
+        """验证排序字段"""
+        if v and v not in ['created_at', 'updated_at', 'user_id', 'product_name', 'status']:
+            raise ValueError("不支持的排序字段")
+        return v
+
+
+class JobSearchParams(BaseQueryParams, DateRangeParams):
+    """工作高级搜索参数"""
+    user_id: Optional[str] = Field(default=None, description="用户ID（支持模糊搜索）")
+    product_name: Optional[str] = Field(default=None, description="产品名称（支持模糊搜索）")
+    boc_batch_number: Optional[str] = Field(default=None, description="BOC批次号（支持模糊搜索）")
+    boc_task_number: Optional[str] = Field(default=None, description="BOC任务号（支持模糊搜索）")
+    status: Optional[JobStatusEnum] = Field(default=None, description="状态过滤")
+    submission_type: Optional[SubmissionTypeEnum] = Field(default=None, description="提交类型过滤")
+    dialect: Optional[str] = Field(default=None, description="SQLFluff方言")
+    
+    @validator('sort_by')
+    def validate_job_search_sort_by(cls, v):
+        """验证排序字段"""
+        if v and v not in ['created_at', 'updated_at', 'user_id', 'product_name', 'status', 'submission_type']:
+            raise ValueError("不支持的排序字段")
+        return v
+    
+    @validator('user_id', 'product_name', 'boc_batch_number', 'boc_task_number')
+    def validate_search_fields(cls, v):
+        """验证搜索字段"""
+        if v is not None:
+            v = v.strip()
+            if len(v) > 255:
+                raise ValueError("搜索字段不能超过255字符")
         return v
 
 

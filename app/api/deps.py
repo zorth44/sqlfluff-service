@@ -138,6 +138,91 @@ def get_pagination_params(
     return page, size
 
 
+def get_search_params(
+    page: int = 1,
+    size: int = 10,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> dict:
+    """
+    获取搜索参数
+    
+    Args:
+        page: 页码（默认1）
+        size: 每页大小（默认10）
+        sort_by: 排序字段（默认created_at）
+        sort_order: 排序方向（默认desc）
+        start_date: 开始日期（ISO格式字符串）
+        end_date: 结束日期（ISO格式字符串）
+        
+    Returns:
+        dict: 验证后的搜索参数
+        
+    Raises:
+        HTTPException: 参数无效时抛出400错误
+    """
+    # 验证分页参数
+    if page < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="页码必须大于0"
+        )
+    
+    if size < 1 or size > 100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="每页大小必须在1-100之间"
+        )
+    
+    # 验证排序参数
+    allowed_sort_fields = ['created_at', 'updated_at', 'user_id', 'product_name', 'status', 'submission_type']
+    if sort_by not in allowed_sort_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"排序字段必须是以下之一: {', '.join(allowed_sort_fields)}"
+        )
+    
+    if sort_order.lower() not in ['asc', 'desc']:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="排序方向必须是 'asc' 或 'desc'"
+        )
+    
+    # 验证日期参数
+    from datetime import datetime
+    parsed_start_date = None
+    parsed_end_date = None
+    
+    if start_date:
+        try:
+            parsed_start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="开始日期格式无效，请使用ISO格式（如：2023-01-01T00:00:00）"
+            )
+    
+    if end_date:
+        try:
+            parsed_end_date = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="结束日期格式无效，请使用ISO格式（如：2023-01-01T00:00:00）"
+            )
+    
+    return {
+        "page": page,
+        "size": size,
+        "sort_by": sort_by,
+        "sort_order": sort_order.lower(),
+        "start_date": parsed_start_date,
+        "end_date": parsed_end_date
+    }
+
+
 # ============= 错误处理工具 =============
 
 def handle_service_exception(e: Exception, operation: str = "操作") -> HTTPException:

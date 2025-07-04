@@ -114,4 +114,131 @@ class TestJobsAPI:
         data = response.json()
         assert "items" in data
         assert "pagination" in data
-        assert len(data["items"]) >= 0  # 可能有其他测试创建的工作 
+        assert len(data["items"]) >= 0  # 可能有其他测试创建的工作
+        
+    def test_search_jobs_basic(self, client):
+        """测试基本搜索功能"""
+        # 创建测试数据
+        test_jobs = [
+            {"sql_content": "SELECT * FROM users;", "user_id": "user123", "product_name": "ProductA"},
+            {"sql_content": "SELECT * FROM orders;", "user_id": "user456", "product_name": "ProductB"},
+            {"sql_content": "SELECT * FROM products;", "user_id": "user123", "product_name": "ProductC"}
+        ]
+        
+        for job_data in test_jobs:
+            client.post("/api/v1/jobs", json=job_data)
+        
+        # 测试用户ID模糊搜索
+        response = client.get("/api/v1/jobs/search?user_id=user123")
+        assert response.status_code == 200
+        data = response.json()
+        assert "jobs" in data
+        assert data["jobs"]["total"] >= 2  # 应该找到至少2个user123的工作
+        
+        # 测试产品名称模糊搜索
+        response = client.get("/api/v1/jobs/search?product_name=Product")
+        assert response.status_code == 200
+        data = response.json()
+        assert "jobs" in data
+        assert data["jobs"]["total"] >= 3  # 应该找到所有Product开头的工作
+        
+    def test_search_jobs_with_filters(self, client):
+        """测试带过滤条件的搜索"""
+        # 创建测试数据
+        test_jobs = [
+            {
+                "sql_content": "SELECT * FROM users;",
+                "user_id": "test_user",
+                "product_name": "TestProduct",
+                "boc_batch_number": "BATCH001",
+                "boc_task_number": "TASK001"
+            }
+        ]
+        
+        for job_data in test_jobs:
+            client.post("/api/v1/jobs", json=job_data)
+        
+        # 测试多条件搜索
+        response = client.get(
+            "/api/v1/jobs/search?"
+            "user_id=test_user&"
+            "product_name=TestProduct&"
+            "boc_batch_number=BATCH001&"
+            "boc_task_number=TASK001"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "jobs" in data
+        assert data["jobs"]["total"] >= 1
+        
+    def test_search_jobs_pagination(self, client):
+        """测试搜索分页功能"""
+        # 创建多个测试工作
+        for i in range(15):
+            client.post(
+                "/api/v1/jobs",
+                json={
+                    "sql_content": f"SELECT * FROM table{i};",
+                    "user_id": f"user{i}",
+                    "product_name": f"Product{i}"
+                }
+            )
+        
+        # 测试分页
+        response = client.get("/api/v1/jobs/search?page=1&size=5")
+        assert response.status_code == 200
+        data = response.json()
+        assert "jobs" in data
+        assert len(data["jobs"]["items"]) <= 5
+        assert data["jobs"]["page"] == 1
+        assert data["jobs"]["size"] == 5
+        
+        # 测试第二页
+        response = client.get("/api/v1/jobs/search?page=2&size=5")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["jobs"]["page"] == 2
+        
+    def test_search_jobs_sorting(self, client):
+        """测试搜索排序功能"""
+        # 创建测试数据
+        test_jobs = [
+            {"sql_content": "SELECT * FROM users;", "user_id": "user_a", "product_name": "ProductA"},
+            {"sql_content": "SELECT * FROM orders;", "user_id": "user_b", "product_name": "ProductB"},
+            {"sql_content": "SELECT * FROM products;", "user_id": "user_c", "product_name": "ProductC"}
+        ]
+        
+        for job_data in test_jobs:
+            client.post("/api/v1/jobs", json=job_data)
+        
+        # 测试按用户ID升序排序
+        response = client.get("/api/v1/jobs/search?sort_by=user_id&sort_order=asc")
+        assert response.status_code == 200
+        data = response.json()
+        assert "jobs" in data
+        
+        # 测试按产品名称降序排序
+        response = client.get("/api/v1/jobs/search?sort_by=product_name&sort_order=desc")
+        assert response.status_code == 200
+        data = response.json()
+        assert "jobs" in data
+        
+    def test_search_jobs_invalid_params(self, client):
+        """测试无效的搜索参数"""
+        # 测试无效的排序字段
+        response = client.get("/api/v1/jobs/search?sort_by=invalid_field")
+        assert response.status_code == 400
+        
+        # 测试无效的排序方向
+        response = client.get("/api/v1/jobs/search?sort_order=invalid")
+        assert response.status_code == 400
+        
+        # 测试无效的页码
+        response = client.get("/api/v1/jobs/search?page=0")
+        assert response.status_code == 400
+        
+        # 测试无效的页面大小
+        response = client.get("/api/v1/jobs/search?size=0")
+        assert response.status_code == 400
+        response = client.get("/api/v1/jobs/search?size=101")
+        assert response.status_code == 400 

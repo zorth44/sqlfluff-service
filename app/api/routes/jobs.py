@@ -10,7 +10,7 @@ from typing import Optional, List
 
 from app.api.deps import (
     get_job_service, validate_job_id, get_pagination_params,
-    handle_service_exception
+    get_search_params, handle_service_exception
 )
 from app.services.job_service import JobService
 from app.schemas.job import (
@@ -273,6 +273,73 @@ async def list_jobs(
     except Exception as e:
         api_logger.error(f"查询Job列表失败: {e}")
         raise handle_service_exception(e, "查询核验工作列表")
+
+
+@router.get("/jobs/search", response_model=JobListResponse)
+async def search_jobs(
+    # 搜索参数
+    user_id: Optional[str] = Query(None, description="用户ID（支持模糊搜索）"),
+    product_name: Optional[str] = Query(None, description="产品名称（支持模糊搜索）"),
+    boc_batch_number: Optional[str] = Query(None, description="BOC批次号（支持模糊搜索）"),
+    boc_task_number: Optional[str] = Query(None, description="BOC任务号（支持模糊搜索）"),
+    status: Optional[JobStatusEnum] = Query(None, description="状态过滤"),
+    submission_type: Optional[SubmissionTypeEnum] = Query(None, description="提交类型过滤"),
+    dialect: Optional[str] = Query(None, description="SQLFluff方言"),
+    # 分页和排序参数
+    search_params: dict = Depends(get_search_params),
+    job_service: JobService = Depends(get_job_service)
+):
+    """
+    高级搜索核验工作列表
+    
+    支持多种搜索条件：
+    - 模糊搜索：user_id、product_name、boc_batch_number、boc_task_number
+    - 精确匹配：status、submission_type、dialect
+    - 日期范围：created_at
+    - 分页和排序
+    
+    所有搜索条件都是可选的，可以组合使用。
+    """
+    try:
+        # 提取搜索参数
+        page = search_params["page"]
+        size = search_params["size"]
+        sort_by = search_params["sort_by"]
+        sort_order = search_params["sort_order"]
+        start_date = search_params["start_date"]
+        end_date = search_params["end_date"]
+        
+        api_logger.info(
+            f"搜索Job: 页码={page}, 大小={size}, 用户ID={user_id}, "
+            f"产品={product_name}, BOC批次={boc_batch_number}, BOC任务={boc_task_number}, "
+            f"状态={status}, 类型={submission_type}, 方言={dialect}, "
+            f"排序={sort_by}:{sort_order}, 日期范围={start_date}~{end_date}"
+        )
+        
+        # 调用业务服务搜索Job列表
+        job_list = await job_service.search_jobs(
+            page=page,
+            size=size,
+            user_id=user_id,
+            product_name=product_name,
+            boc_batch_number=boc_batch_number,
+            boc_task_number=boc_task_number,
+            status=status,
+            submission_type=submission_type,
+            dialect=dialect,
+            start_date=start_date,
+            end_date=end_date,
+            sort_by=sort_by,
+            sort_order=sort_order
+        )
+        
+        response = JobListResponse(jobs=job_list)
+        api_logger.debug(f"Job搜索成功: 总数={job_list.total}")
+        return response
+        
+    except Exception as e:
+        api_logger.error(f"搜索Job列表失败: {e}")
+        raise handle_service_exception(e, "搜索核验工作列表")
 
 
 @router.get("/jobs/statistics", response_model=JobStatistics)
