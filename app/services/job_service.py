@@ -96,6 +96,59 @@ class JobService:
             if isinstance(e, (JobException, FileException)):
                 raise
             raise JobException(ErrorCode.JOB_CREATION_FAILED, job_id, str(e))
+
+    async def create_job_from_extracted_folder(self, request) -> JobCreateResponse:
+        """
+        从解压后的文件夹创建新的核验工作
+        
+        Args:
+            request: JobCreateFromExtractedRequest 创建请求
+            
+        Returns:
+            JobCreateResponse: 创建响应，包含job_id
+        """
+        try:
+            # 生成job_id
+            job_id = generate_job_id()
+            
+            # 验证解压后文件夹存在
+            if not self.file_manager.directory_exists(request.extracted_folder_path):
+                raise JobException(ErrorCode.FILE_NOT_FOUND, job_id, "解压后的文件夹不存在")
+            
+            # 创建数据库记录
+            job = LintingJob(
+                job_id=job_id,
+                status=JobStatusEnum.ACCEPTED,
+                submission_type=SubmissionTypeEnum.ZIP_ARCHIVE,  # 固定为ZIP_ARCHIVE
+                source_path=request.extracted_folder_path,  # 直接记录解压后的文件夹路径
+                dialect=request.dialect or "ansi",
+                user_id=request.user_id,
+                product_name=request.product_name,
+                boc_batch_number=request.boc_batch_number,
+                boc_task_number=request.boc_task_number,
+                rules=request.rules
+            )
+            
+            self.db.add(job)
+            self.db.flush()  # 获取数据库生成的id，但不提交事务
+            
+            # 创建子任务（直接遍历解压后的文件夹）
+            await self._create_extracted_folder_tasks(job_id, request.extracted_folder_path)
+            
+            self.db.commit()
+            
+            # 确保事务提交后数据立即可见
+            self.db.flush()
+            
+            self.logger.info(f"Job创建成功（从解压文件夹）: {job_id}, 文件夹: {request.extracted_folder_path}")
+            return JobCreateResponse(job_id=job_id)
+            
+        except Exception as e:
+            self.db.rollback()
+            self.logger.error(f"创建Job失败（从解压文件夹）: {e}")
+            if isinstance(e, (JobException, FileException)):
+                raise
+            raise JobException(ErrorCode.JOB_CREATION_FAILED, job_id, str(e))
     
     async def get_job_by_id(self, job_id: str) -> Optional[LintingJob]:
         """
@@ -597,6 +650,35 @@ class JobService:
             if isinstance(e, (JobException, FileException)):
                 raise
             raise JobException("创建ZIP任务", job_id, str(e))
+
+    async def _create_extracted_folder_tasks(self, job_id: str, extracted_folder_path: str):
+        """为解压后的文件夹创建多个Task"""
+        try:
+            # 直接遍历解压后的文件夹获取SQL文件
+            sql_files = self.file_manager.list_sql_files(extracted_folder_path)
+            
+            if not sql_files:
+                raise JobException(ErrorCode.FILE_NOT_FOUND, job_id, "解压后的文件夹中没有找到SQL文件")
+            
+            # 批量创建Task
+            from app.services.task_service import TaskService
+            task_service = TaskService(self.db)
+            
+            # 生成源文件路径列表
+            source_paths = []
+            for sql_file in sql_files:
+                # 相对于NFS根目录的路径
+                relative_path = os.path.join(extracted_folder_path, sql_file).replace('\\', '/')
+                source_paths.append(relative_path)
+            
+            await task_service.batch_create_tasks(job_id, source_paths)
+            
+            self.logger.info(f"为解压后文件夹创建任务: {job_id}, 文件数: {len(sql_files)}")
+            
+        except Exception as e:
+            if isinstance(e, (JobException, FileException)):
+                raise
+            raise JobException("创建解压文件夹任务", job_id, str(e))
     
     def _is_valid_status_transition(self, current_status: JobStatusEnum, new_status: JobStatusEnum) -> bool:
         """验证状态转换是否有效"""

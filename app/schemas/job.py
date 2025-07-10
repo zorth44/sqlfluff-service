@@ -184,6 +184,136 @@ class JobCreateRequest(BaseModel):
         return v
 
 
+class JobCreateFromExtractedRequest(BaseModel):
+    """从解压后的文件夹创建核验工作请求模型"""
+    extracted_folder_path: str = Field(
+        description="解压后的ZIP文件夹在NFS中的相对路径"
+    )
+    dialect: Optional[str] = Field(
+        default="ansi",
+        description="SQLFluff方言，如mysql、postgres、bigquery等"
+    )
+    user_id: str = Field(
+        description="创建工作的用户ID"
+    )
+    product_name: str = Field(
+        description="产品名称"
+    )
+    boc_batch_number: Optional[str] = Field(
+        default=None,
+        description="BOC批次号"
+    )
+    boc_task_number: Optional[str] = Field(
+        default=None,
+        description="BOC任务号"
+    )
+    
+    rules: Optional[List[str]] = Field(
+        default=None,
+        description="SQLFluff规则列表，如['RF02', 'L032']，如果为空则使用默认规则"
+    )
+    
+    @validator('extracted_folder_path')
+    def validate_extracted_folder_path(cls, v):
+        """验证解压后文件夹路径"""
+        if not v or not v.strip():
+            raise ValueError("解压后文件夹路径不能为空")
+        v = v.strip()
+        if len(v) > 1024:
+            raise ValueError("文件夹路径不能超过1024字符")
+        return v
+    
+    @validator('dialect')
+    def validate_dialect(cls, v):
+        """验证SQLFluff方言"""
+        if v is not None:
+            v = v.strip().lower()
+            if not v:
+                raise ValueError("方言不能为空")
+            
+            # 动态获取SQLFluff支持的方言列表
+            try:
+                from app.services.sqlfluff_service import SQLFluffService
+                service = SQLFluffService()
+                supported_dialects = set(service.get_supported_dialects())
+            except Exception:
+                # 如果动态获取失败，使用常见的方言作为fallback
+                supported_dialects = {
+                    'ansi', 'mysql', 'postgres', 'postgresql', 'sqlite', 'bigquery', 
+                    'snowflake', 'redshift', 'oracle', 'tsql', 'hive', 'spark',
+                    'teradata', 'exasol', 'db2', 'duckdb', 'gbase8a', 'mariadb',
+                    'clickhouse', 'databricks', 'athena', 'duckdb', 'greenplum',
+                    'materializ', 'impala', 'soql', 'sparksql', 'starrocks', 
+                    'trino', 'vertica'
+                }
+            
+            if v not in supported_dialects:
+                raise ValueError(f"不支持的方言: {v}，支持的方言包括: {', '.join(sorted(supported_dialects))}")
+        return v
+    
+    @validator('user_id')
+    def validate_user_id(cls, v):
+        """验证用户ID"""
+        if not v or not v.strip():
+            raise ValueError("用户ID不能为空")
+        v = v.strip()
+        if len(v) > 255:
+            raise ValueError("用户ID不能超过255字符")
+        return v
+    
+    @validator('product_name')
+    def validate_product_name(cls, v):
+        """验证产品名称"""
+        if not v or not v.strip():
+            raise ValueError("产品名称不能为空")
+        v = v.strip()
+        if len(v) > 255:
+            raise ValueError("产品名称不能超过255字符")
+        return v
+    
+    @validator('boc_batch_number')
+    def validate_boc_batch_number(cls, v):
+        """验证BOC批次号"""
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 255:
+                raise ValueError("BOC批次号不能超过255字符")
+        return v
+    
+    @validator('boc_task_number')
+    def validate_boc_task_number(cls, v):
+        """验证BOC任务号"""
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 255:
+                raise ValueError("BOC任务号不能超过255字符")
+        return v
+
+    @validator('rules')
+    def validate_rules(cls, v):
+        """验证SQLFluff规则列表"""
+        if v is not None:
+            if not isinstance(v, list):
+                raise ValueError("rules必须是列表格式")
+            for rule in v:
+                if not isinstance(rule, str):
+                    raise ValueError("规则代码必须是字符串")
+                rule = rule.strip().upper()
+                if not rule:
+                    raise ValueError("规则代码不能为空")
+                import re
+                if not re.match(r'^[A-Z][A-Z0-9_]*$', rule):
+                    raise ValueError(f"无效的规则代码格式: {rule}")
+            v = sorted(list(set(v)))
+            if len(v) > 100:
+                raise ValueError("规则数量不能超过100个")
+        return v
+
+
 class JobCreateWithUploadRequest(BaseModel):
     """创建核验工作请求模型（带文件上传）"""
     sql_content: Optional[str] = Field(

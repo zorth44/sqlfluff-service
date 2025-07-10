@@ -14,7 +14,7 @@ from app.api.deps import (
 )
 from app.services.job_service import JobService
 from app.schemas.job import (
-    JobCreateRequest, JobCreateWithUploadRequest, JobCreateResponse, JobDetailResponse,
+    JobCreateRequest, JobCreateWithUploadRequest, JobCreateFromExtractedRequest, JobCreateResponse, JobDetailResponse,
     JobListResponse, JobSummary, JobStatistics, JobTaskIdsResponse
 )
 from app.schemas.common import JobStatusEnum, SubmissionTypeEnum
@@ -199,6 +199,65 @@ async def create_job_with_upload(
         raise
     except Exception as e:
         api_logger.error(f"创建Job失败（带上传）: {e}")
+        raise handle_service_exception(e, "创建核验工作")
+
+
+@router.post("/jobs/create-from-extracted", response_model=JobCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+async def create_job_from_extracted_folder(
+    request: JobCreateFromExtractedRequest,
+    job_service: JobService = Depends(get_job_service)
+):
+    """
+    从解压后的文件夹创建新的核验工作
+    
+    接收已解压的ZIP文件夹路径，跳过解压步骤直接遍历文件夹创建子任务。
+    适用于已经预处理过的ZIP文件场景。
+    
+    创建成功后会自动派发Celery任务进行处理。
+    """
+    try:
+        api_logger.info(f"从解压文件夹创建Job请求: {request.dict()}")
+        
+        # 调用业务服务创建Job
+        response = await job_service.create_job_from_extracted_folder(request)
+        
+        # 派发Celery任务进行后台处理
+        try:
+            from app.celery_app.tasks import process_sql_file
+            from app.services.task_service import TaskService
+            
+            # 获取已创建的Task列表并直接派发处理任务
+            task_service = TaskService(job_service.db)
+            
+            # 获取Job下所有待处理的Task，不使用分页
+            from app.models.database import LintingTask
+            from app.schemas.common import TaskStatusEnum
+            
+            tasks = job_service.db.query(LintingTask)\
+                .filter(LintingTask.job_id == response.job_id)\
+                .filter(LintingTask.status == TaskStatusEnum.PENDING)\
+                .all()
+            
+            dispatched_count = 0
+            for task in tasks:
+                try:
+                    process_sql_file.delay(task.task_id)
+                    dispatched_count += 1
+                except Exception as task_error:
+                    api_logger.error(f"派发单个任务失败: {task.task_id}, {task_error}")
+                    
+            api_logger.info(f"派发任务处理完成: {dispatched_count}个任务")
+                
+        except Exception as e:
+            api_logger.error(f"任务派发失败: {e}")
+            # 注意：即使任务派发失败，Job已经创建，所以仍然返回成功
+            # 用户可以稍后重试或通过其他方式处理
+        
+        api_logger.info(f"Job创建成功（从解压文件夹）: {response.job_id}")
+        return response
+        
+    except Exception as e:
+        api_logger.error(f"创建Job失败（从解压文件夹）: {e}")
         raise handle_service_exception(e, "创建核验工作")
 
 

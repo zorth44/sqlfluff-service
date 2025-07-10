@@ -292,6 +292,45 @@ class FileManager:
         """
         return self.get_absolute_path(relative_path).exists()
     
+    def directory_exists(self, relative_path: str) -> bool:
+        """检查目录是否存在
+        
+        Args:
+            relative_path: 相对目录路径
+            
+        Returns:
+            bool: 目录是否存在
+        """
+        dir_path = self.get_absolute_path(relative_path)
+        return dir_path.exists() and dir_path.is_dir()
+    
+    def list_sql_files(self, relative_path: str) -> List[str]:
+        """列出目录中的SQL文件
+        
+        Args:
+            relative_path: 相对目录路径
+            
+        Returns:
+            List[str]: SQL文件名列表（相对于指定目录）
+        """
+        dir_path = self.get_absolute_path(relative_path)
+        
+        if not dir_path.exists():
+            raise FileException("列出SQL文件", str(dir_path), "目录不存在")
+        
+        sql_files = []
+        try:
+            for file_path in dir_path.rglob('*'):
+                if file_path.is_file() and self._is_valid_sql_file(file_path):
+                    # 获取相对于指定目录的路径
+                    rel_path = str(file_path.relative_to(dir_path))
+                    sql_files.append(rel_path)
+                    
+            file_logger.debug(f"找到 {len(sql_files)} 个SQL文件: {dir_path}")
+            return sql_files
+        except Exception as e:
+            raise FileException("列出SQL文件", str(dir_path), str(e))
+    
     def get_file_size(self, relative_path: str) -> int:
         """获取文件大小
         

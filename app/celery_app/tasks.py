@@ -227,22 +227,23 @@ def expand_zip_and_dispatch_tasks(self, job_id: str):
                 
             else:
                 # ZIP包处理
-                service_logger.info(f"Processing ZIP file for job: {job_id}")
+                service_logger.info(f"Processing ZIP archive for job: {job_id}")
                 
-                # 构建ZIP文件完整路径
-                zip_full_path = file_manager.get_absolute_path(job.source_path)
-                service_logger.info(f"Processing ZIP file: {zip_full_path}")
+                # 构建源路径完整路径
+                source_full_path = file_manager.get_absolute_path(job.source_path)
+                service_logger.info(f"Processing source path: {source_full_path}")
                 
-                # 创建临时解压目录
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    service_logger.info(f"Extracting ZIP file to: {temp_dir}")
+                # 检查是否为已解压的文件夹
+                if source_full_path.is_dir():
+                    # 已解压的文件夹处理
+                    service_logger.info(f"Processing extracted folder for job: {job_id}")
                     
-                    # 解压ZIP文件并获取SQL文件列表
+                    # 直接遍历解压后的文件夹获取SQL文件
                     try:
-                        extract_dir, sql_files = file_manager.extract_zip_file(job.source_path, temp_dir)
-                        service_logger.info(f"Found {len(sql_files)} SQL files in ZIP")
+                        sql_files = file_manager.list_sql_files(job.source_path)
+                        service_logger.info(f"Found {len(sql_files)} SQL files in extracted folder")
                     except Exception as e:
-                        error_msg = f"ZIP extraction failed: {e}"
+                        error_msg = f"Failed to list SQL files in extracted folder: {e}"
                         service_logger.error(error_msg)
                         job.status = JobStatusEnum.FAILED
                         job.error_message = error_msg
@@ -250,7 +251,7 @@ def expand_zip_and_dispatch_tasks(self, job_id: str):
                         raise
                     
                     if not sql_files:
-                        error_msg = "No SQL files found in ZIP archive"
+                        error_msg = "No SQL files found in extracted folder"
                         service_logger.warning(error_msg)
                         job.status = JobStatusEnum.FAILED
                         job.error_message = error_msg
@@ -261,19 +262,11 @@ def expand_zip_and_dispatch_tasks(self, job_id: str):
                     task_ids = []
                     
                     for sql_file_path in sql_files:
-                        # sql_files现在是字符串列表，每个元素是相对路径
+                        # sql_files是相对于解压后文件夹的路径列表
                         file_name = os.path.basename(sql_file_path)
                         
-                        # 生成目标文件路径
-                        job_dir = f"jobs/{job_id}"
-                        file_manager.create_directory(job_dir)
-                        target_relative_path = f"{job_dir}/{file_name}"
-                        
-                        # 复制文件到标准位置
-                        file_manager.copy_file(
-                            sql_file_path,
-                            target_relative_path
-                        )
+                        # 生成完整的源文件路径
+                        full_source_path = os.path.join(job.source_path, sql_file_path).replace('\\', '/')
                         
                         # 创建Task记录
                         task_id = generate_task_id()
@@ -281,7 +274,7 @@ def expand_zip_and_dispatch_tasks(self, job_id: str):
                             task_id=task_id,
                             job_id=job_id,
                             status=TaskStatusEnum.PENDING,
-                            source_file_path=target_relative_path
+                            source_file_path=full_source_path
                         )
                         db.add(task)
                         task_ids.append(task_id)
@@ -291,7 +284,7 @@ def expand_zip_and_dispatch_tasks(self, job_id: str):
                         service_logger.info(f"Dispatched SQL processing task: {task_id} for file: {file_name}")
                     
                     db.commit()
-                    service_logger.info(f"Successfully dispatched {len(task_ids)} SQL processing tasks for job {job_id}")
+                    service_logger.info(f"Successfully dispatched {len(task_ids)} SQL processing tasks for extracted folder job {job_id}")
                     
                     return {
                         "status": "success",
@@ -299,6 +292,77 @@ def expand_zip_and_dispatch_tasks(self, job_id: str):
                         "total_tasks": len(task_ids),
                         "task_ids": task_ids
                     }
+                    
+                else:
+                    # ZIP文件处理（需要解压）
+                    service_logger.info(f"Processing ZIP file for job: {job_id}")
+                    
+                    # 创建临时解压目录
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        service_logger.info(f"Extracting ZIP file to: {temp_dir}")
+                        
+                        # 解压ZIP文件并获取SQL文件列表
+                        try:
+                            extract_dir, sql_files = file_manager.extract_zip_file(job.source_path, temp_dir)
+                            service_logger.info(f"Found {len(sql_files)} SQL files in ZIP")
+                        except Exception as e:
+                            error_msg = f"ZIP extraction failed: {e}"
+                            service_logger.error(error_msg)
+                            job.status = JobStatusEnum.FAILED
+                            job.error_message = error_msg
+                            db.commit()
+                            raise
+                        
+                        if not sql_files:
+                            error_msg = "No SQL files found in ZIP archive"
+                            service_logger.warning(error_msg)
+                            job.status = JobStatusEnum.FAILED
+                            job.error_message = error_msg
+                            db.commit()
+                            return {"status": "failed", "message": error_msg}
+                        
+                        # 为每个SQL文件创建Task记录和处理任务
+                        task_ids = []
+                        
+                        for sql_file_path in sql_files:
+                            # sql_files现在是字符串列表，每个元素是相对路径
+                            file_name = os.path.basename(sql_file_path)
+                            
+                            # 生成目标文件路径
+                            job_dir = f"jobs/{job_id}"
+                            file_manager.create_directory(job_dir)
+                            target_relative_path = f"{job_dir}/{file_name}"
+                            
+                            # 复制文件到标准位置
+                            file_manager.copy_file(
+                                sql_file_path,
+                                target_relative_path
+                            )
+                            
+                            # 创建Task记录
+                            task_id = generate_task_id()
+                            task = LintingTask(
+                                task_id=task_id,
+                                job_id=job_id,
+                                status=TaskStatusEnum.PENDING,
+                                source_file_path=target_relative_path
+                            )
+                            db.add(task)
+                            task_ids.append(task_id)
+                            
+                            # 派发SQL文件处理任务
+                            process_sql_file.delay(task_id)
+                            service_logger.info(f"Dispatched SQL processing task: {task_id} for file: {file_name}")
+                        
+                        db.commit()
+                        service_logger.info(f"Successfully dispatched {len(task_ids)} SQL processing tasks for ZIP job {job_id}")
+                        
+                        return {
+                            "status": "success",
+                            "job_id": job_id,
+                            "total_tasks": len(task_ids),
+                            "task_ids": task_ids
+                        }
                 
     except Exception as e:
         service_logger.error(f"Failed to process job {job_id}: {e}")
