@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError, HTTPException
+from fastapi.staticfiles import StaticFiles  # 添加这行
 import uvicorn
 import asyncio
 import time
@@ -98,6 +99,9 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if settings.DEBUG else None,
         lifespan=lifespan
     )
+    
+    # 挂载静态文件目录
+    app.mount("/static", StaticFiles(directory="app/static"), name="static")
     
     # 配置中间件
     _configure_middleware(app)

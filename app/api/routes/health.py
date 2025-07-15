@@ -84,19 +84,9 @@ async def health_check(db: Session = Depends(get_db)):
         if not os.path.exists(nfs_root):
             raise Exception(f"NFS根目录不存在: {nfs_root}")
         
-        # 检查是否可以创建测试文件
-        test_file_path = os.path.join(nfs_root, "health_check_test")
-        with open(test_file_path, "w") as f:
-            f.write("health check test")
-        
-        # 读取测试文件
-        with open(test_file_path, "r") as f:
-            content = f.read()
-            if content != "health check test":
-                raise Exception("NFS读写测试失败")
-        
-        # 删除测试文件
-        os.remove(test_file_path)
+        # 使用FileManager的安全权限检查方法
+        if not file_manager.check_write_permission():
+            raise Exception("NFS写权限检查失败")
         
         health_status["checks"]["nfs"] = {
             "status": "healthy",

@@ -10,6 +10,7 @@ import shutil
 import zipfile
 import tempfile
 import mimetypes
+import threading
 from pathlib import Path
 from typing import List, Optional, Tuple, Union, Dict, Any
 from datetime import datetime
@@ -23,41 +24,93 @@ from app.core.logging import file_logger
 class FileManager:
     """文件管理器"""
     
+    _instance = None
+    _lock = threading.Lock()
+    _initialized = False
+    
+    def __new__(cls, nfs_root: Optional[str] = None):
+        """单例模式，确保只有一个FileManager实例"""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+        return cls._instance
+    
     def __init__(self, nfs_root: Optional[str] = None):
         """初始化文件管理器
         
         Args:
             nfs_root: NFS根目录路径，如果为None则使用配置中的路径
         """
-        self.nfs_root = Path(nfs_root or settings.NFS_SHARE_ROOT_PATH)
-        self._ensure_nfs_root_exists()
-        
-        # 支持的SQL文件扩展名
-        self.sql_extensions = {'.sql', '.SQL'}
-        
-        # 支持的压缩文件扩展名
-        self.archive_extensions = {'.zip', '.ZIP'}
-        
-        # 最大文件大小（字节）
-        self.max_file_size = settings.MAX_FILE_SIZE
-        
-        # ZIP包中最大文件数
-        self.max_zip_files = settings.MAX_ZIP_FILES
+        # 避免重复初始化
+        if self._initialized:
+            return
+            
+        with self._lock:
+            if self._initialized:
+                return
+                
+            self.nfs_root = Path(nfs_root or settings.NFS_SHARE_ROOT_PATH)
+            self._ensure_nfs_root_exists()
+            
+            # 支持的SQL文件扩展名
+            self.sql_extensions = {'.sql', '.SQL'}
+            
+            # 支持的压缩文件扩展名
+            self.archive_extensions = {'.zip', '.ZIP'}
+            
+            # 最大文件大小（字节）
+            self.max_file_size = settings.MAX_FILE_SIZE
+            
+            # ZIP包中最大文件数
+            self.max_zip_files = settings.MAX_ZIP_FILES
+            
+            self._initialized = True
     
     def _ensure_nfs_root_exists(self) -> None:
         """确保NFS根目录存在"""
         try:
+            # 创建目录（如果不存在）
             self.nfs_root.mkdir(parents=True, exist_ok=True)
             
-            # 测试写权限
-            test_file = self.nfs_root / '.write_test'
-            test_file.write_text('test')
-            test_file.unlink()
+            # 根据配置决定是否进行权限检查
+            if settings.NFS_PERMISSION_CHECK or settings.ENVIRONMENT in ['dev', 'test']:
+                self._test_write_permission()
             
             file_logger.info(f"NFS根目录初始化成功: {self.nfs_root}")
         except Exception as e:
             file_logger.error(f"NFS根目录初始化失败: {e}")
             raise FileException("初始化", str(self.nfs_root), f"NFS根目录不可访问: {e}")
+    
+    def _test_write_permission(self) -> None:
+        """测试写权限（线程安全）"""
+        try:
+            # 使用线程安全的临时文件测试写权限
+            with tempfile.NamedTemporaryFile(
+                dir=self.nfs_root, 
+                prefix='write_test_', 
+                suffix='.tmp',
+                delete=True
+            ) as test_file:
+                test_file.write(b'test')
+                test_file.flush()
+                # 文件会在with块结束时自动删除
+            file_logger.debug(f"NFS写权限测试通过: {self.nfs_root}")
+        except Exception as e:
+            file_logger.error(f"NFS写权限测试失败: {e}")
+            raise FileException("权限检查", str(self.nfs_root), f"写权限测试失败: {e}")
+    
+    def check_write_permission(self) -> bool:
+        """检查写权限（可选调用）
+        
+        Returns:
+            bool: 是否有写权限
+        """
+        try:
+            self._test_write_permission()
+            return True
+        except Exception:
+            return False
     
     def get_absolute_path(self, relative_path: str) -> Path:
         """获取绝对路径

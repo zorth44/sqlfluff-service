@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE: int = Field(default=50 * 1024 * 1024, description="最大文件大小(字节)")
     MAX_ZIP_FILES: int = Field(default=1000, description="ZIP包中最大文件数")
     TEMP_DIR_CLEANUP_INTERVAL: int = Field(default=3600, description="临时目录清理间隔(秒)")
+    NFS_PERMISSION_CHECK: bool = Field(default=False, description="是否在初始化时检查NFS写权限")
     
     # ============= 任务处理配置 =============
     MAX_CONCURRENT_TASKS: int = Field(default=8, description="最大并发任务数", env="MAX_CONCURRENT_TASKS")

@@ -322,18 +322,18 @@ class ConsulClient:
         Returns:
             str: IP地址
         """
-        try:
-            # 创建一个UDP socket连接到外部地址（不会实际发送数据）
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
+        # try:
+        #     # 创建一个UDP socket连接到外部地址（不会实际发送数据）
+        #     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        #         s.connect(("8.8.8.8", 80))
+        #         local_ip = s.getsockname()[0]
             
-            self.logger.debug(f"获取本机IP: {local_ip}")
-            return local_ip
+        #     self.logger.debug(f"获取本机IP: {local_ip}")
+        #     return local_ip
             
-        except Exception as e:
-            self.logger.warning(f"获取本机IP失败，使用默认值: {e}")
-            return "127.0.0.1"
+        # except Exception as e:
+        #     self.logger.warning(f"获取本机IP失败，使用默认值: {e}")
+        return "127.0.0.1"
     
     async def check_consul_health(self) -> Dict[str, Any]:
         """
