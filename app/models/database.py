@@ -224,6 +224,12 @@ class LintingTask(Base):
         comment="文件级别的错误信息"
     )
     
+    sql_lines = Column(
+        Integer,
+        nullable=True,
+        comment="SQL文件行数"
+    )
+    
     # 时间戳字段
     created_at = Column(
         DateTime(6),
@@ -259,6 +265,7 @@ class LintingTask(Base):
             'source_file_path': self.source_file_path,
             'result_file_path': self.result_file_path,
             'error_message': self.error_message,
+            'sql_lines': self.sql_lines,
             'created_at': self.created_at,
             'updated_at': self.updated_at
         }

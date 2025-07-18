@@ -26,6 +26,7 @@ class TaskResponse(BaseModel):
     error_message: Optional[str] = Field(default=None, description="错误消息")
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="最后更新时间")
+    sql_lines: Optional[int] = Field(default=None, description="SQL文件行数")
     
     class Config:
         json_encoders = {
@@ -38,7 +39,8 @@ class TaskResponse(BaseModel):
                 "status": "SUCCESS",
                 "result_file_path": "jobs/job-d8b8.../results/task-e0e1....json",
                 "created_at": "2025-06-27T09:30:01.123456",
-                "updated_at": "2025-06-27T09:30:15.654321"
+                "updated_at": "2025-06-27T09:30:15.654321",
+                "sql_lines": 25
             }
         }
 
@@ -55,6 +57,7 @@ class TaskDetailResponse(BaseModel):
     updated_at: datetime = Field(description="最后更新时间")
     file_size: Optional[int] = Field(default=None, description="文件大小（字节）")
     processing_duration: Optional[float] = Field(default=None, description="处理时长（秒）")
+    sql_lines: Optional[int] = Field(default=None, description="SQL文件行数")
     
     class Config:
         json_encoders = {
@@ -70,7 +73,8 @@ class TaskDetailResponse(BaseModel):
                 "created_at": "2025-06-27T09:30:01.123456",
                 "updated_at": "2025-06-27T09:30:15.654321",
                 "file_size": 2048,
-                "processing_duration": 12.5
+                "processing_duration": 12.5,
+                "sql_lines": 25
             }
         }
 

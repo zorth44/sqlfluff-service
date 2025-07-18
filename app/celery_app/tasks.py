@@ -440,6 +440,16 @@ def process_sql_file(self, task_id: str):
                     "message": error_msg
                 }
             
+            # 计算SQL文件行数
+            try:
+                with open(sql_file_path, 'r', encoding='utf-8') as f:
+                    line_count = sum(1 for line in f)
+                task.sql_lines = line_count
+                service_logger.info(f"SQL file {task.source_file_path} has {line_count} lines")
+            except Exception as e:
+                service_logger.warning(f"Failed to count lines in SQL file {task.source_file_path}: {e}")
+                task.sql_lines = None
+            
             # 使用SQLFluff分析SQL文件
             sqlfluff_service = SQLFluffService()
             service_logger.info(f"Analyzing SQL file with SQLFluff: {sql_file_path}, dialect: {job.dialect}, rules: {job.rules}")
