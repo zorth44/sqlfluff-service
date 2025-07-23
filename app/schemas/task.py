@@ -27,6 +27,7 @@ class TaskResponse(BaseModel):
     created_at: datetime = Field(description="创建时间")
     updated_at: datetime = Field(description="最后更新时间")
     sql_lines: Optional[int] = Field(default=None, description="SQL文件行数")
+    total_violations: Optional[int] = Field(default=None, description="违规项总数")
     
     class Config:
         json_encoders = {
@@ -58,6 +59,7 @@ class TaskDetailResponse(BaseModel):
     file_size: Optional[int] = Field(default=None, description="文件大小（字节）")
     processing_duration: Optional[float] = Field(default=None, description="处理时长（秒）")
     sql_lines: Optional[int] = Field(default=None, description="SQL文件行数")
+    total_violations: Optional[int] = Field(default=None, description="违规项总数")
     
     class Config:
         json_encoders = {

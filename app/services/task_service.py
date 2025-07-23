@@ -141,7 +141,9 @@ class TaskService:
                 created_at=task.created_at,
                 updated_at=task.updated_at,
                 file_size=file_size,
-                processing_duration=processing_duration
+                processing_duration=processing_duration,
+                sql_lines=task.sql_lines,
+                total_violations=task.total_violations
             )
             
         except Exception as e:
@@ -230,7 +232,9 @@ class TaskService:
                     result_file_path=task.result_file_path,
                     error_message=task.error_message,
                     created_at=task.created_at,
-                    updated_at=task.updated_at
+                    updated_at=task.updated_at,
+                    sql_lines=task.sql_lines,
+                    total_violations=task.total_violations
                 ))
             
             # 构造分页响应

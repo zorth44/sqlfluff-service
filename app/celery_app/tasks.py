@@ -463,12 +463,16 @@ def process_sql_file(self, task_id: str):
             result_file_path = file_manager.write_json_file(result_relative_path, analysis_result)
             service_logger.info(f"Analysis result saved to: {result_file_path}")
             
+            # 提取违规项总数
+            total_violations = analysis_result.get("summary", {}).get("total_violations", 0)
+            
             # 更新任务状态为SUCCESS
             task.status = TaskStatusEnum.SUCCESS
             task.result_file_path = result_relative_path
+            task.total_violations = total_violations
             db.commit()
             
-            service_logger.info(f"Successfully processed SQL file for task {task_id}")
+            service_logger.info(f"Successfully processed SQL file for task {task_id}, violations: {total_violations}")
             
             # 检查并更新父Job状态
             update_job_status_based_on_tasks(task.job_id, db)
@@ -478,7 +482,7 @@ def process_sql_file(self, task_id: str):
                 "task_id": task_id,
                 "job_id": task.job_id,
                 "result_file_path": result_relative_path,
-                "violations_count": analysis_result.get("summary", {}).get("total_violations", 0)
+                "violations_count": total_violations
             }
             
     except Exception as e:

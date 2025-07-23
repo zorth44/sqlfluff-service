@@ -230,6 +230,12 @@ class LintingTask(Base):
         comment="SQL文件行数"
     )
     
+    total_violations = Column(
+        Integer,
+        nullable=True,
+        comment="SQL文件违规项总数"
+    )
+    
     # 时间戳字段
     created_at = Column(
         DateTime(6),
@@ -266,6 +272,7 @@ class LintingTask(Base):
             'result_file_path': self.result_file_path,
             'error_message': self.error_message,
             'sql_lines': self.sql_lines,
+            'total_violations': self.total_violations,
             'created_at': self.created_at,
             'updated_at': self.updated_at
         }
