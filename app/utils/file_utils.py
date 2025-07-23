@@ -492,6 +492,11 @@ class FileManager:
         """
         file_name = file_path.name
         
+        # 首先检查文件扩展名
+        if file_path.suffix not in self.sql_extensions:
+            file_logger.debug(f"跳过非SQL扩展名文件: {file_name}")
+            return False
+        
         # 排除系统隐藏文件
         if file_name.startswith('._'):
             file_logger.debug(f"跳过系统隐藏文件: {file_name}")

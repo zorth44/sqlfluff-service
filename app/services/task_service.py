@@ -56,6 +56,10 @@ class TaskService:
             if not self.file_manager.file_exists(source_file_path):
                 raise FileException("验证源文件", source_file_path, "源文件不存在")
             
+            # 验证文件是否为SQL文件
+            if not self.file_manager.is_sql_file(source_file_path):
+                raise FileException("验证源文件", source_file_path, "文件不是SQL文件")
+            
             # 生成task_id
             task_id = generate_task_id()
             
@@ -277,6 +281,11 @@ class TaskService:
                 # 验证文件存在
                 if not self.file_manager.file_exists(file_path):
                     self.logger.warning(f"跳过不存在的文件: {file_path}")
+                    continue
+                
+                # 验证文件是否为SQL文件
+                if not self.file_manager.is_sql_file(file_path):
+                    self.logger.warning(f"跳过非SQL文件: {file_path}")
                     continue
                 
                 # 生成task_id
