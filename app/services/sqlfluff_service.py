@@ -215,12 +215,14 @@ class SQLFluffService:
             linter = self._get_linter(dialect)
             used_dialect = dialect or self.default_dialect
             
-            # 执行Linting
-            if rules:
-                # 使用overrides参数来设置规则和方言
-                config = FluffConfig(overrides={"rules": rules, "dialect": used_dialect})
+            # 执行Linting  
+            if rules and any(rule != "default" for rule in rules):
+                # 只有当 rules 中包含除 "default" 之外的有效规则时才使用自定义配置
+                valid_rules = [rule for rule in rules if rule != "default"]
+                config = FluffConfig(overrides={"rules": valid_rules, "dialect": used_dialect})
                 lint_result = linter.lint_string(sql_content, config=config)
             else:
+                # 使用默认配置（包括 rules 为 None、空列表或只包含 "default" 的情况）
                 lint_result = linter.lint_string(sql_content)
             
             # 获取解析树 - 优先从linter结果中获取，fallback到直接解析
