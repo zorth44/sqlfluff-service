@@ -10,6 +10,7 @@ from sqlalchemy import func, and_, or_
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta
 import os
+import asyncio
 
 from app.models.database import LintingJob, LintingTask
 from app.schemas.job import (
@@ -99,7 +100,9 @@ class JobService:
 
     async def create_job_from_extracted_folder(self, request) -> JobCreateResponse:
         """
-        从解压后的文件夹创建新的核验工作
+        从解压后的文件夹创建新的核验工作（异步优化版本）
+        
+        立即返回job_id，异步处理文件扫描、Task创建和Celery派发
         
         Args:
             request: JobCreateFromExtractedRequest 创建请求
@@ -111,7 +114,7 @@ class JobService:
             # 生成job_id
             job_id = generate_job_id()
             
-            # 验证解压后文件夹存在
+            # 快速基础校验
             if not self.file_manager.directory_exists(request.extracted_folder_path):
                 raise JobException(ErrorCode.FILE_NOT_FOUND, job_id, "解压后的文件夹不存在")
             
@@ -130,25 +133,22 @@ class JobService:
             )
             
             self.db.add(job)
-            self.db.flush()  # 获取数据库生成的id，但不提交事务
+            self.db.commit()  # 立即提交，让Job可查询
             
-            # 创建子任务（直接遍历解压后的文件夹）
-            await self._create_extracted_folder_tasks(job_id, request.extracted_folder_path)
+            # 异步启动：文件扫描 + Task创建 + Celery派发
+            asyncio.create_task(
+                self._async_scan_create_and_dispatch(job_id, request.extracted_folder_path)
+            )
             
-            self.db.commit()
-            
-            # 确保事务提交后数据立即可见
-            self.db.flush()
-            
-            self.logger.info(f"Job创建成功（从解压文件夹）: {job_id}, 文件夹: {request.extracted_folder_path}")
-            return JobCreateResponse(job_id=job_id)
+            self.logger.info(f"Job创建成功（异步模式）: {job_id}, 文件夹: {request.extracted_folder_path}")
+            return JobCreateResponse(job_id=job_id)  # 立即返回
             
         except Exception as e:
             self.db.rollback()
             self.logger.error(f"创建Job失败（从解压文件夹）: {e}")
             if isinstance(e, (JobException, FileException)):
                 raise
-            raise JobException(ErrorCode.JOB_CREATION_FAILED, job_id, str(e))
+            raise JobException(ErrorCode.JOB_CREATION_FAILED, job_id if 'job_id' in locals() else "unknown", str(e))
     
     async def get_job_by_id(self, job_id: str) -> Optional[LintingJob]:
         """
@@ -679,6 +679,58 @@ class JobService:
             if isinstance(e, (JobException, FileException)):
                 raise
             raise JobException("创建解压文件夹任务", job_id, str(e))
+    
+    async def _async_scan_create_and_dispatch(self, job_id: str, extracted_folder_path: str):
+        """异步处理：文件扫描 + Task创建 + Celery派发"""
+        try:
+            self.logger.info(f"开始异步处理: {job_id}")
+            
+            # 1. 创建Tasks（使用原有逻辑）
+            await self._create_extracted_folder_tasks(job_id, extracted_folder_path)
+            
+            # 2. 派发Celery任务
+            await self._dispatch_celery_tasks(job_id)
+            
+            self.logger.info(f"异步处理完成: {job_id}")
+            
+        except Exception as e:
+            self.logger.error(f"异步处理失败: {job_id}, 错误: {e}")
+            
+            # 设置Job状态为FAILED
+            try:
+                job = self.db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+                if job:
+                    job.status = JobStatusEnum.FAILED
+                    self.db.commit()
+                    self.logger.info(f"Job状态更新为FAILED: {job_id}")
+            except Exception as db_error:
+                self.logger.error(f"更新Job状态失败: {job_id}, {db_error}")
+    
+    async def _dispatch_celery_tasks(self, job_id: str):
+        """派发Celery任务（从API层移到这里）"""
+        try:
+            from app.celery_app.tasks import process_sql_file
+            from app.schemas.common import TaskStatusEnum
+            
+            # 获取待处理的Tasks
+            tasks = self.db.query(LintingTask)\
+                .filter(LintingTask.job_id == job_id)\
+                .filter(LintingTask.status == TaskStatusEnum.PENDING)\
+                .all()
+            
+            dispatched_count = 0
+            for task in tasks:
+                try:
+                    process_sql_file.delay(task.task_id)
+                    dispatched_count += 1
+                except Exception as e:
+                    self.logger.error(f"派发单个任务失败: {task.task_id}, {e}")
+            
+            self.logger.info(f"派发Celery任务完成: {job_id}, 数量: {dispatched_count}")
+            
+        except Exception as e:
+            self.logger.error(f"派发Celery任务失败: {job_id}, 错误: {e}")
+            raise
     
     def _is_valid_status_transition(self, current_status: JobStatusEnum, new_status: JobStatusEnum) -> bool:
         """验证状态转换是否有效"""
