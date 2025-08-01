@@ -114,8 +114,15 @@ class JobService:
             # 生成job_id
             job_id = generate_job_id()
             
-            # 快速基础校验
-            if not self.file_manager.directory_exists(request.extracted_folder_path):
+            # 在线程池中执行文件系统检查，避免阻塞事件循环
+            loop = asyncio.get_event_loop()
+            directory_exists = await loop.run_in_executor(
+                None, 
+                self.file_manager.directory_exists, 
+                request.extracted_folder_path
+            )
+            
+            if not directory_exists:
                 raise JobException(ErrorCode.FILE_NOT_FOUND, job_id, "解压后的文件夹不存在")
             
             # 创建数据库记录
@@ -654,8 +661,13 @@ class JobService:
     async def _create_extracted_folder_tasks(self, job_id: str, extracted_folder_path: str):
         """为解压后的文件夹创建多个Task"""
         try:
-            # 直接遍历解压后的文件夹获取SQL文件
-            sql_files = self.file_manager.list_sql_files(extracted_folder_path)
+            # 在线程池中遍历文件夹获取SQL文件，避免阻塞事件循环
+            loop = asyncio.get_event_loop()
+            sql_files = await loop.run_in_executor(
+                None, 
+                self.file_manager.list_sql_files, 
+                extracted_folder_path
+            )
             
             if not sql_files:
                 raise JobException(ErrorCode.FILE_NOT_FOUND, job_id, "解压后的文件夹中没有找到SQL文件")
@@ -682,29 +694,40 @@ class JobService:
     
     async def _async_scan_create_and_dispatch(self, job_id: str, extracted_folder_path: str):
         """异步处理：文件扫描 + Task创建 + Celery派发"""
+        # 为后台任务创建独立的数据库会话
+        from app.core.database import create_database_session
+        
+        db = create_database_session()
         try:
             self.logger.info(f"开始异步处理: {job_id}")
             
-            # 1. 创建Tasks（使用原有逻辑）
-            await self._create_extracted_folder_tasks(job_id, extracted_folder_path)
+            # 创建独立的JobService实例，使用新的数据库会话
+            background_job_service = JobService(db)
+            
+            # 1. 创建Tasks（使用独立的数据库会话）
+            await background_job_service._create_extracted_folder_tasks(job_id, extracted_folder_path)
             
             # 2. 派发Celery任务
-            await self._dispatch_celery_tasks(job_id)
+            await background_job_service._dispatch_celery_tasks(job_id)
             
             self.logger.info(f"异步处理完成: {job_id}")
             
         except Exception as e:
             self.logger.error(f"异步处理失败: {job_id}, 错误: {e}")
             
-            # 设置Job状态为FAILED
+            # 设置Job状态为FAILED（使用独立的数据库会话）
             try:
-                job = self.db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+                job = db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
                 if job:
                     job.status = JobStatusEnum.FAILED
-                    self.db.commit()
+                    db.commit()
                     self.logger.info(f"Job状态更新为FAILED: {job_id}")
             except Exception as db_error:
                 self.logger.error(f"更新Job状态失败: {job_id}, {db_error}")
+                db.rollback()
+        finally:
+            # 确保关闭独立的数据库会话
+            db.close()
     
     async def _dispatch_celery_tasks(self, job_id: str):
         """派发Celery任务（从API层移到这里）"""
