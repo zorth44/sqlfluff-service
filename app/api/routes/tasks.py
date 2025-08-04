@@ -240,6 +240,7 @@ async def list_tasks(
     pagination: tuple[int, int] = Depends(get_pagination_params),
     status_filter: Optional[TaskStatusEnum] = Query(None, alias="status", description="状态过滤"),
     job_id: Optional[str] = Query(None, description="Job ID过滤"),
+    violation_exists: Optional[bool] = Query(None, description="是否有违规项过滤，true表示只显示有违规的任务，false表示只显示无违规的任务"),
     task_service: TaskService = Depends(get_task_service)
 ):
     """
@@ -249,7 +250,7 @@ async def list_tasks(
     """
     try:
         page, size = pagination
-        api_logger.info(f"查询Task列表: 页码={page}, 大小={size}, 状态={status_filter}, Job={job_id}")
+        api_logger.info(f"查询Task列表: 页码={page}, 大小={size}, 状态={status_filter}, Job={job_id}, 违规过滤={violation_exists}")
         
         # 如果指定了job_id，使用专门的方法
         if job_id:
@@ -257,7 +258,8 @@ async def list_tasks(
                 job_id=job_id,
                 page=page,
                 size=size,
-                status=status_filter
+                status=status_filter,
+                violation_exists=violation_exists
             )
         else:
             # 否则查询全部任务（这里需要在TaskService中实现通用的list_tasks方法）
@@ -266,7 +268,8 @@ async def list_tasks(
                 job_id=None,  # 查询所有任务
                 page=page,
                 size=size,
-                status=status_filter
+                status=status_filter,
+                violation_exists=violation_exists
             )
         
         response = TaskListResponse(tasks=task_list)

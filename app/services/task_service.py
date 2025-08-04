@@ -198,26 +198,41 @@ class TaskService:
                 raise
             raise TaskException(ErrorCode.TASK_UPDATE_FAILED, task_id, str(e))
     
-    async def get_tasks_by_job_id(self, job_id: str, page: int = 1, size: int = 10,
-                                status: Optional[TaskStatusEnum] = None) -> PaginationResponse[TaskResponse]:
+    async def get_tasks_by_job_id(self, job_id: Optional[str], page: int = 1, size: int = 10,
+                                status: Optional[TaskStatusEnum] = None,
+                                violation_exists: Optional[bool] = None) -> PaginationResponse[TaskResponse]:
         """
         获取Job下的Tasks分页列表
         
         Args:
-            job_id: Job ID
+            job_id: Job ID，如果为None则查询所有任务
             page: 页码
-            size: 每页大小
+            size: 每页大小  
             status: 状态过滤
+            violation_exists: 违规项过滤，True表示只返回有违规的任务，False表示只返回无违规的任务，None表示不过滤
             
         Returns:
             PaginationResponse[TaskResponse]: 分页的Task列表
         """
         try:
-            query = self.db.query(LintingTask).filter(LintingTask.job_id == job_id)
+            # 构造基础查询
+            if job_id:
+                query = self.db.query(LintingTask).filter(LintingTask.job_id == job_id)
+            else:
+                query = self.db.query(LintingTask)
             
             # 状态过滤
             if status:
                 query = query.filter(LintingTask.status == status)
+            
+            # 违规项过滤
+            if violation_exists is not None:
+                if violation_exists:
+                    # 只显示有违规的任务（total_violations > 0）
+                    query = query.filter(and_(LintingTask.total_violations.isnot(None), LintingTask.total_violations > 0))
+                else:
+                    # 只显示无违规的任务（total_violations = 0 或 NULL）
+                    query = query.filter(or_(LintingTask.total_violations.is_(None), LintingTask.total_violations == 0))
             
             # 排序
             query = query.order_by(LintingTask.created_at.desc())
