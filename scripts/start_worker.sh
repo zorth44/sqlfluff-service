@@ -116,19 +116,21 @@ check_redis() {
     
     # 尝试连接Redis
     if command -v redis-cli &> /dev/null; then
-        # 构建Redis连接命令
-        local redis_cmd="redis-cli -h $REDIS_HOST -p $REDIS_PORT"
-        
-        # 如果有密码，添加密码参数
+        # 测试连接 - 使用环境变量传递密码避免shell特殊字符问题
         if [[ -n "$REDIS_PASSWORD" ]]; then
-            redis_cmd="$redis_cmd -a $REDIS_PASSWORD"
-        fi
-        
-        # 测试连接
-        if $redis_cmd ping &> /dev/null; then
-            log_success "Redis连接正常: $REDIS_HOST:$REDIS_PORT"
+            # 使用REDISCLI_AUTH环境变量传递密码，避免命令行特殊字符问题
+            if REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping &> /dev/null; then
+                log_success "Redis连接正常: $REDIS_HOST:$REDIS_PORT"
+            else
+                log_warning "Redis连接失败，但继续启动"
+            fi
         else
-            log_warning "Redis连接失败，但继续启动"
+            # 没有密码的情况
+            if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping &> /dev/null; then
+                log_success "Redis连接正常: $REDIS_HOST:$REDIS_PORT"
+            else
+                log_warning "Redis连接失败，但继续启动"
+            fi
         fi
     else
         log_warning "redis-cli未安装，跳过Redis连接检查"

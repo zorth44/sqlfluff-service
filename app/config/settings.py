@@ -147,18 +147,29 @@ class Settings(BaseSettings):
             self.MYSQL_DATABASE_PASSWORD,
             self.MYSQL_DATABASE_NAME
         ]):
-            return f"mysql+pymysql://{self.MYSQL_DATABASE_USERNAME}:{self.MYSQL_DATABASE_PASSWORD}@{self.MYSQL_DATABASE_HOST}:{self.MYSQL_DATABASE_PORT}/{self.MYSQL_DATABASE_NAME}"
+            from urllib.parse import quote_plus
+            # URL编码用户名和密码以处理特殊字符
+            username = quote_plus(self.MYSQL_DATABASE_USERNAME)
+            password = quote_plus(self.MYSQL_DATABASE_PASSWORD)
+            return f"mysql+pymysql://{username}:{password}@{self.MYSQL_DATABASE_HOST}:{self.MYSQL_DATABASE_PORT}/{self.MYSQL_DATABASE_NAME}"
         
         # 如果两种配置都没有提供，返回默认值或抛出错误
         raise ValueError("Database configuration is incomplete. Please provide either DATABASE_URL or all MySQL database configuration variables.")
     
     def get_celery_broker_url(self) -> str:
         """获取Celery Broker Redis连接URL"""
+        from urllib.parse import quote_plus
+        
         auth = ""
         if self.REDIS_USERNAME and self.REDIS_PASSWORD:
-            auth = f"{self.REDIS_USERNAME}:{self.REDIS_PASSWORD}@"
+            # URL编码用户名和密码以处理特殊字符
+            username = quote_plus(self.REDIS_USERNAME)
+            password = quote_plus(self.REDIS_PASSWORD)
+            auth = f"{username}:{password}@"
         elif self.REDIS_PASSWORD:
-            auth = f":{self.REDIS_PASSWORD}@"
+            # URL编码密码以处理特殊字符
+            password = quote_plus(self.REDIS_PASSWORD)
+            auth = f":{password}@"
         
         return f"redis://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB_BROKER}"
     
@@ -169,11 +180,18 @@ class Settings(BaseSettings):
     
     def get_celery_result_backend_url(self) -> str:
         """获取Celery Result Backend Redis连接URL"""
+        from urllib.parse import quote_plus
+        
         auth = ""
         if self.REDIS_USERNAME and self.REDIS_PASSWORD:
-            auth = f"{self.REDIS_USERNAME}:{self.REDIS_PASSWORD}@"
+            # URL编码用户名和密码以处理特殊字符
+            username = quote_plus(self.REDIS_USERNAME)
+            password = quote_plus(self.REDIS_PASSWORD)
+            auth = f"{username}:{password}@"
         elif self.REDIS_PASSWORD:
-            auth = f":{self.REDIS_PASSWORD}@"
+            # URL编码密码以处理特殊字符
+            password = quote_plus(self.REDIS_PASSWORD)
+            auth = f":{password}@"
         
         return f"redis://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB_RESULT}"
     
