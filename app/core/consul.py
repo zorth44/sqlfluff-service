@@ -318,21 +318,18 @@ class ConsulClient:
     def _get_local_ip(self) -> str:
         """
         获取本机IP地址
+        使用环境变量 CONSUL_SERVICE_IP 指定服务注册IP
         
         Returns:
             str: IP地址
         """
-        # try:
-        #     # 创建一个UDP socket连接到外部地址（不会实际发送数据）
-        #     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        #         s.connect(("8.8.8.8", 80))
-        #         local_ip = s.getsockname()[0]
-            
-        #     self.logger.debug(f"获取本机IP: {local_ip}")
-        #     return local_ip
-            
-        # except Exception as e:
-        #     self.logger.warning(f"获取本机IP失败，使用默认值: {e}")
+        if settings.CONSUL_SERVICE_IP:
+            self.logger.info(f"使用环境变量指定的服务IP: {settings.CONSUL_SERVICE_IP}")
+            return settings.CONSUL_SERVICE_IP
+        
+        # 如果未设置环境变量，给出明确提示并使用默认值
+        self.logger.error("未设置 CONSUL_SERVICE_IP 环境变量，使用默认回环地址")
+        self.logger.error("请设置环境变量: export CONSUL_SERVICE_IP=your_server_ip")
         return "127.0.0.1"
     
     async def check_consul_health(self) -> Dict[str, Any]:
