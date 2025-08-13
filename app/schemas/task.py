@@ -143,6 +143,7 @@ class TaskViolationWithSQL(BaseModel):
     description: str = Field(description="违规描述")
     rule: str = Field(description="违规规则")
     severity: str = Field(description="严重程度")
+    severity_level: Optional[str] = Field(default=None, description="规则定义表映射的分级：INFO/MINOR/MAJOR/BLOCKER/CRITICAL")
     fixable: bool = Field(description="是否可修复")
     sql_line: str = Field(description="对应的SQL行内容")
     
@@ -176,6 +177,7 @@ class TaskLintResultResponse(BaseModel):
                         "description": "Unqualified reference 'product5' found in select with more than one referenced table/view.",
                         "rule": "references.qualification",
                         "severity": "warning",
+                "severity_level": "MAJOR",
                         "fixable": False,
                         "sql_line": "SELECT product5.name, category.name FROM products product5 JOIN categories category ON product5.category_id = category.id;"
                     }

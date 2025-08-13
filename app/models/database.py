@@ -5,13 +5,35 @@
 包含表结构、关系、索引和约束定义。
 """
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Enum, ForeignKey, Index, JSON
+from sqlalchemy import Column, Integer, String, Text, DateTime, Enum, ForeignKey, Index, JSON, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
 from typing import List, Optional
 
 from app.core.database import Base
+
+
+class RuleDefinition(Base):
+    """
+    规则定义表模型，对应表 rule_definitions
+    """
+    __tablename__ = "rule_definitions"
+
+    rule_code = Column(String(50), primary_key=True, comment="规则编号(放入rules[]的值)")
+    rule_name = Column(String(200), nullable=False, comment="规则名称")
+    rule_description = Column(Text, nullable=True, comment="规则描述")
+    applicable_tech_stack = Column(JSON, nullable=False, comment='适用技术栈["hive","gbase8a","ansi"]')
+    source = Column(String(50), nullable=True, default='sqlfluff', comment="来源(开发规范/实施策略/生产总结)")
+    verification_method = Column(String(100), nullable=True, comment="规则核验方式(语法检查/格式检查/约定检查)")
+    statement_pattern = Column(String(200), nullable=True, comment="适用语句范式")
+    severity_level = Column(String(20), nullable=False, default='INFO', comment="规则分级：INFO、MINOR、MAJOR、BLOCKER、CRITICAL")
+    is_active = Column(Boolean, nullable=False, default=True, comment="是否启用")
+    created_at = Column(DateTime(6), nullable=False, default=func.now())
+    updated_at = Column(DateTime(6), nullable=False, default=func.now(), onupdate=func.now())
+
+    def __repr__(self):
+        return f"<RuleDefinition(rule_code='{self.rule_code}', severity_level='{self.severity_level}')>"
 
 
 class LintingJob(Base):

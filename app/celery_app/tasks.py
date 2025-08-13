@@ -20,6 +20,7 @@ from app.celery_app.celery_main import celery_app
 from app.core.database import SessionLocal
 from app.models.database import LintingJob, LintingTask
 from app.services.sqlfluff_service import SQLFluffService
+from app.services.rule_severity_mapper import RuleSeverityMapper
 from app.utils.file_utils import FileManager
 from app.core.logging import service_logger
 from app.core.exceptions import JobException, TaskException, FileException, SQLFluffException, ErrorCode
@@ -455,6 +456,19 @@ def process_sql_file(self, task_id: str):
             service_logger.info(f"Analyzing SQL file with SQLFluff: {sql_file_path}, dialect: {job.dialect}, rules: {job.rules}")
             # 传递相对路径、方言和规则给SQLFluffService
             analysis_result = sqlfluff_service.analyze_sql_file(task.source_file_path, job.dialect, job.rules)
+
+            # 规则分级后处理：写入 severity_level（不影响原有 severity 字段）
+            try:
+                severity_map = RuleSeverityMapper.get_mapping_for_dialect(db, job.dialect or "ansi")
+                violations = analysis_result.get("violations", [])
+                if violations and severity_map:
+                    for v in violations:
+                        code = v.get("code")
+                        if code in severity_map:
+                            v["severity_level"] = severity_map[code]
+                # 无映射或未命中时，不写入字段，保持兼容
+            except Exception as map_err:
+                service_logger.warning(f"为violations写入severity_level失败: {map_err}")
             
             # 生成结果文件路径
             result_relative_path = f"results/{task.job_id}/{task_id}_result.json"

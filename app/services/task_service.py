@@ -409,6 +409,7 @@ class TaskService:
                         description=violation.get('description', ''),
                         rule=violation.get('rule', ''),
                         severity=violation.get('severity', ''),
+                        severity_level=violation.get('severity_level'),
                         fixable=violation.get('fixable', False),
                         sql_line=""
                     )
@@ -437,6 +438,7 @@ class TaskService:
                         description=violation.get('description', ''),
                         rule=violation.get('rule', ''),
                         severity=violation.get('severity', ''),
+                        severity_level=violation.get('severity_level'),
                         fixable=violation.get('fixable', False),
                         sql_line=sql_line
                     )
@@ -457,6 +459,7 @@ class TaskService:
                         description=violation.get('description', ''),
                         rule=violation.get('rule', ''),
                         severity=violation.get('severity', ''),
+                        severity_level=violation.get('severity_level'),
                         fixable=violation.get('fixable', False),
                         sql_line=""
                     )
