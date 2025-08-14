@@ -6,7 +6,7 @@
 """
 
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import Field, validator
 from pydantic_settings import BaseSettings
 
@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     REDIS_DB_BROKER: int = Field(default=0, description="Celery消息代理使用的Redis数据库", env="REDIS_DB_BROKER")
     REDIS_DB_RESULT: int = Field(default=1, description="Celery结果后端使用的Redis数据库", env="REDIS_DB_RESULT")
     REDIS_MAX_CONNECTIONS: int = Field(default=50, description="Redis最大连接数")
+    
+    # Redis集群配置
+    REDIS_CLUSTER_ENABLED: bool = Field(default=False, description="是否启用Redis集群模式", env="REDIS_CLUSTER_ENABLED")
+    REDIS_CLUSTER_NODES: Optional[str] = Field(default=None, description="Redis集群节点列表(格式: host1:port1,host2:port2)", env="REDIS_CLUSTER_NODES")
+    REDIS_CLUSTER_KEY_PREFIX: str = Field(default="{celery}:", description="Redis集群键前缀，解决cross-slot问题", env="REDIS_CLUSTER_KEY_PREFIX")
+    REDIS_CLUSTER_DISABLE_PIPELINE: bool = Field(default=True, description="是否禁用Redis集群管道操作（解决MovedError）", env="REDIS_CLUSTER_DISABLE_PIPELINE")
     
     # ============= NFS共享目录配置 =============
     NFS_SHARE_ROOT_PATH: str = Field(
@@ -160,6 +166,25 @@ class Settings(BaseSettings):
         """获取Celery Broker Redis连接URL"""
         from urllib.parse import quote_plus
         
+        # 如果启用了集群模式，使用自定义的集群传输
+        if self.REDIS_CLUSTER_ENABLED and self.REDIS_CLUSTER_NODES:
+            # 解析第一个节点作为broker URL，使用自定义传输协议
+            first_node = self.REDIS_CLUSTER_NODES.split(',')[0].strip()
+            host, port = first_node.split(':')
+            
+            auth = ""
+            if self.REDIS_USERNAME and self.REDIS_PASSWORD:
+                username = quote_plus(self.REDIS_USERNAME)
+                password = quote_plus(self.REDIS_PASSWORD)
+                auth = f"{username}:{password}@"
+            elif self.REDIS_PASSWORD:
+                password = quote_plus(self.REDIS_PASSWORD)
+                auth = f":{password}@"
+            
+            # 仍使用标准redis协议，但配置会禁用管道操作
+            return f"redis://{auth}{host}:{port}/{self.REDIS_DB_BROKER}"
+        
+        # 单节点模式
         auth = ""
         if self.REDIS_USERNAME and self.REDIS_PASSWORD:
             # URL编码用户名和密码以处理特殊字符
@@ -182,6 +207,25 @@ class Settings(BaseSettings):
         """获取Celery Result Backend Redis连接URL"""
         from urllib.parse import quote_plus
         
+        # 如果启用了集群模式，需要使用自定义backend类，这里返回标准格式
+        if self.REDIS_CLUSTER_ENABLED and self.REDIS_CLUSTER_NODES:
+            # 集群模式下，result backend由celery_main.py中的自定义类处理
+            # 这里返回标准URL格式，实际连接由RedisClusterBackend管理
+            first_node = self.REDIS_CLUSTER_NODES.split(',')[0].strip()
+            host, port = first_node.split(':')
+            
+            auth = ""
+            if self.REDIS_USERNAME and self.REDIS_PASSWORD:
+                username = quote_plus(self.REDIS_USERNAME)
+                password = quote_plus(self.REDIS_PASSWORD)
+                auth = f"{username}:{password}@"
+            elif self.REDIS_PASSWORD:
+                password = quote_plus(self.REDIS_PASSWORD)
+                auth = f":{password}@"
+            
+            return f"redis://{auth}{host}:{port}/{self.REDIS_DB_RESULT}"
+        
+        # 单节点模式
         auth = ""
         if self.REDIS_USERNAME and self.REDIS_PASSWORD:
             # URL编码用户名和密码以处理特殊字符
@@ -194,6 +238,67 @@ class Settings(BaseSettings):
             auth = f":{password}@"
         
         return f"redis://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB_RESULT}"
+    
+    def get_celery_broker_cluster_url(self) -> str:
+        """获取Celery Broker Redis集群连接URL"""
+        from urllib.parse import quote_plus
+        
+        # 如果启用了集群模式，返回集群格式URL
+        if self.REDIS_CLUSTER_ENABLED and self.REDIS_CLUSTER_NODES:
+            # 解析第一个节点作为broker URL，使用集群格式
+            first_node = self.REDIS_CLUSTER_NODES.split(',')[0].strip()
+            host, port = first_node.split(':')
+            
+            auth = ""
+            if self.REDIS_USERNAME and self.REDIS_PASSWORD:
+                username = quote_plus(self.REDIS_USERNAME)
+                password = quote_plus(self.REDIS_PASSWORD)
+                auth = f"{username}:{password}@"
+            elif self.REDIS_PASSWORD:
+                password = quote_plus(self.REDIS_PASSWORD)
+                auth = f":{password}@"
+            
+            return f"redis+cluster://{auth}{host}:{port}/{self.REDIS_DB_BROKER}"
+        
+        # 如果没有启用集群，返回标准URL
+        return self.get_celery_broker_url()
+    
+    def get_redis_cluster_nodes(self) -> List[Dict[str, str]]:
+        """获取Redis集群节点列表"""
+        if not self.REDIS_CLUSTER_ENABLED or not self.REDIS_CLUSTER_NODES:
+            return []
+        
+        nodes = []
+        for node_str in self.REDIS_CLUSTER_NODES.split(','):
+            node_str = node_str.strip()
+            if ':' in node_str:
+                host, port = node_str.split(':', 1)
+                nodes.append({'host': host.strip(), 'port': int(port.strip())})
+        
+        return nodes
+    
+    def get_celery_redis_cluster_settings(self) -> Dict[str, Any]:
+        """获取Celery Redis集群设置（用于CELERY_REDIS_CLUSTER_SETTINGS）"""
+        if not self.REDIS_CLUSTER_ENABLED or not self.REDIS_CLUSTER_NODES:
+            return {}
+        
+        return {
+            'startup_nodes': self.get_redis_cluster_nodes(),
+            'decode_responses': True,
+            'skip_full_coverage_check': True,
+            'max_connections_per_node': 10,
+            # 明确禁用管道相关功能
+            'readonly_mode': False,
+            'reinitialize_steps': 10,
+            'cluster_error_retry_attempts': 3,
+            # 连接池配置
+            'connection_pool_kwargs': {
+                'retry_on_timeout': True,
+                'socket_timeout': 5,
+                'socket_connect_timeout': 5,
+                'health_check_interval': 30,
+            }
+        }
     
     def get_nfs_root_path(self) -> str:
         """获取NFS根路径"""

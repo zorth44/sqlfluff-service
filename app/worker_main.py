@@ -22,6 +22,12 @@ def main():
     # 设置日志
     setup_logging()
     
+    # Redis集群模式：设置环境变量禁用 mingle
+    if settings.REDIS_CLUSTER_ENABLED:
+        os.environ['CELERY_WORKER_DIRECT'] = 'true'
+        os.environ['CELERY_DISABLE_RATE_LIMITS'] = 'true'
+        print("[Worker] 设置集群兼容环境变量")
+    
     # 设置Worker参数
     worker_args = [
         'worker',
@@ -31,6 +37,15 @@ def main():
         '--max-tasks-per-child=1000',
         f'--hostname=worker@{os.getenv("HOSTNAME", "localhost")}',
     ]
+    
+    # Redis集群模式：禁用会导致跨槽错误的功能
+    if settings.REDIS_CLUSTER_ENABLED:
+        worker_args.extend([
+            '--without-mingle',     # 禁用 worker 握手
+            '--without-gossip',     # 禁用 gossip 协议
+            '--without-heartbeat',  # 禁用心跳
+        ])
+        print("[Worker] Redis集群模式：已禁用 mingle, gossip, heartbeat")
     
     # 如果指定了队列，则只处理特定队列
     worker_queues = os.getenv('CELERY_WORKER_QUEUES')

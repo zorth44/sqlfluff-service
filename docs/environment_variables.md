@@ -15,7 +15,7 @@ DATABASE_URL=mysql+pymysql://zorth:password@gz-cdb-5k5lx4bt.sql.tencentcdb.com:2
 
 ### Redis配置
 ```bash
-# Redis服务器配置
+# 单节点Redis配置
 REDIS_HOST=your-redis-host
 REDIS_PORT=6379
 REDIS_USERNAME=your-redis-username  # 可选，如果Redis需要用户名认证
@@ -23,12 +23,22 @@ REDIS_PASSWORD=your-redis-password  # Redis密码
 REDIS_DB_BROKER=0                   # Celery消息代理使用的数据库
 REDIS_DB_RESULT=1                   # Celery结果后端使用的数据库
 
-# 示例
+# 示例（单节点）
 REDIS_HOST=47.116.196.61
 REDIS_PORT=27493
 REDIS_PASSWORD=your_redis_password
 REDIS_DB_BROKER=0
 REDIS_DB_RESULT=1
+
+# Redis集群配置（解决cross-slot问题）
+REDIS_CLUSTER_ENABLED=true                                    # 启用Redis集群模式
+REDIS_CLUSTER_NODES=node1:6379,node2:6379,node3:6379         # 集群节点列表
+REDIS_CLUSTER_KEY_PREFIX={celery}:                            # 键前缀，解决cross-slot问题
+
+# 示例（集群）
+REDIS_CLUSTER_ENABLED=true
+REDIS_CLUSTER_NODES=redis-cluster-node1:6379,redis-cluster-node2:6379,redis-cluster-node3:6379
+REDIS_CLUSTER_KEY_PREFIX={celery}:
 ```
 
 ### NFS共享目录配置

@@ -42,6 +42,26 @@ check_env_vars() {
         "MYSQL_DATABASE_NAME"
     )
     
+    # 可选但重要的变量
+    local optional_vars=(
+        "REDIS_CLUSTER_ENABLED"
+        "REDIS_CLUSTER_NODES"
+        "REDIS_PASSWORD"
+    )
+    
+    log_info "检查可选环境变量:"
+    for var in "${optional_vars[@]}"; do
+        if [[ -n "${!var}" ]]; then
+            if [[ "$var" == "REDIS_PASSWORD" ]]; then
+                log_info "  $var: ***已设置***"
+            else
+                log_info "  $var: ${!var}"
+            fi
+        else
+            log_info "  $var: 未设置"
+        fi
+    done
+    
     local missing_vars=()
     
     for var in "${required_vars[@]}"; do
@@ -168,14 +188,30 @@ start_worker_service() {
     log_info "  日志级别: $log_level"
     log_info "  队列: $queues"
     
-    # 构建Celery命令
-    local celery_cmd="celery -A app.celery_app.celery_main worker"
+    # 设置 Python 路径确保能找到模块
+    export PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}."
+    
+    # Redis集群模式的环境变量
+    if [[ "${REDIS_CLUSTER_ENABLED,,}" == "true" ]]; then
+        log_info "启用Redis集群兼容模式"
+        # 注意：这些环境变量将通过Celery配置文件设置，而不是环境变量
+        # 因为Celery 5.x不允许混用新旧格式
+    fi
+    
+    # 构建Celery命令 - 正确的应用路径
+    local celery_cmd="celery -A app.celery_app.celery_main:celery_app worker"
     celery_cmd="$celery_cmd --loglevel=$log_level"
     celery_cmd="$celery_cmd --concurrency=$concurrency"
     celery_cmd="$celery_cmd --hostname=worker@%h"
     celery_cmd="$celery_cmd --max-tasks-per-child=1000"
     celery_cmd="$celery_cmd --prefetch-multiplier=1"
     celery_cmd="$celery_cmd --queues=$queues"
+    
+    # Redis集群模式添加额外参数
+    if [[ "${REDIS_CLUSTER_ENABLED,,}" == "true" ]]; then
+        celery_cmd="$celery_cmd --without-mingle --without-gossip --without-heartbeat"
+        log_info "Redis集群模式：已添加 --without-mingle --without-gossip --without-heartbeat 参数"
+    fi
     
     log_info "执行命令: $celery_cmd"
     
