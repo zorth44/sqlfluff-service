@@ -432,10 +432,18 @@ class SQLFluffService:
                             if hasattr(sub_item, 'line_no') and hasattr(sub_item, 'description'):
                                 lint_errors.append(sub_item)
                                 self.logger.debug(f"从列表中提取违规项: {sub_item}")
+                            # 处理SQLParseError对象
+                            elif 'SQLParseError' in str(type(sub_item)):
+                                lint_errors.append(sub_item)
+                                self.logger.debug(f"从列表中提取SQLParseError: {sub_item}")
                     # 检查是否是单个SQLLintError对象
                     elif hasattr(item, 'line_no') and hasattr(item, 'description'):
                         lint_errors.append(item)
                         self.logger.debug(f"直接提取违规项: {item}")
+                    # 检查是否是SQLParseError对象
+                    elif 'SQLParseError' in str(type(item)):
+                        lint_errors.append(item)
+                        self.logger.debug(f"直接提取SQLParseError: {item}")
                     # 检查是否是文件结果对象（包含violations）
                     elif hasattr(item, 'violations'):
                         lint_errors.extend(item.violations)
@@ -471,46 +479,78 @@ class SQLFluffService:
                     rule_code = "UNKNOWN"
                     rule_name = "unknown"
                     
-                    # 方法1: 从violation.rule获取
-                    if hasattr(violation, 'rule') and violation.rule:
-                        if hasattr(violation.rule, 'code'):
-                            rule_code = violation.rule.code
-                        if hasattr(violation.rule, 'name'):
-                            rule_name = violation.rule.name
+                    # 特殊处理：如果是SQLParseError，直接设置为PRS
+                    if 'SQLParseError' in str(type(violation)):
+                        rule_code = 'PRS'
+                        rule_name = 'parsing'
+                        self.logger.debug(f"检测到SQLParseError，设置规则代码为PRS: {violation}")
+                    else:
+                        # 方法1: 从violation.rule获取
+                        if hasattr(violation, 'rule') and violation.rule:
+                            if hasattr(violation.rule, 'code'):
+                                rule_code = violation.rule.code
+                            if hasattr(violation.rule, 'name'):
+                                rule_name = violation.rule.name
+                        
+                        # 方法2: 从violation.code获取（某些版本）
+                        if rule_code == "UNKNOWN" and hasattr(violation, 'code'):
+                            rule_code = violation.code
+                        
+                        # 方法3: 从description中提取规则代码（备用方法）
+                        if rule_code == "UNKNOWN" and hasattr(violation, 'description'):
+                            description = violation.description
+                            import re
+                            code_match = re.search(r'([A-Z][A-Z0-9_]+)', description)
+                            if code_match:
+                                rule_code = code_match.group(1)
+                                self.logger.debug(f"从描述中提取规则代码: {rule_code}")
+                        
+                        # 方法4: 从rule_name获取（某些版本）
+                        if rule_name == "unknown" and hasattr(violation, 'rule_name'):
+                            rule_name = violation.rule_name
+                        
+                        # 微调：如果是语法错误，强制code为PRS
+                        if hasattr(violation, 'description'):
+                            desc = violation.description.lower()
+                            if 'unparsable' in desc or 'found unparsable' in desc:
+                                rule_code = 'PRS'
+                                self.logger.debug(f"语法错误违规项，强制规则代码为PRS: {violation.description}")
                     
-                    # 方法2: 从violation.code获取（某些版本）
-                    if rule_code == "UNKNOWN" and hasattr(violation, 'code'):
-                        rule_code = violation.code
-                    
-                    # 方法3: 从description中提取规则代码（备用方法）
-                    if rule_code == "UNKNOWN" and hasattr(violation, 'description'):
-                        description = violation.description
+                    # 构建violation字典，处理不同类型的violation对象
+                    if 'SQLParseError' in str(type(violation)):
+                        # SQLParseError对象的处理
+                        description = str(violation)
+                        # 尝试从错误消息中提取行号和位置
+                        line_no = 0
+                        line_pos = 0
                         import re
-                        code_match = re.search(r'([A-Z][A-Z0-9_]+)', description)
-                        if code_match:
-                            rule_code = code_match.group(1)
-                            self.logger.debug(f"从描述中提取规则代码: {rule_code}")
-                    
-                    # 方法4: 从rule_name获取（某些版本）
-                    if rule_name == "unknown" and hasattr(violation, 'rule_name'):
-                        rule_name = violation.rule_name
-                    
-                    # 微调：如果是语法错误，强制code为PRS
-                    if hasattr(violation, 'description'):
-                        desc = violation.description.lower()
-                        if 'unparsable' in desc or 'found unparsable' in desc:
-                            rule_code = 'PRS'
-                            self.logger.debug(f"语法错误违规项，强制规则代码为PRS: {violation.description}")
-                    
-                    violation_dict = {
-                        "line_no": getattr(violation, 'line_no', 0),
-                        "line_pos": getattr(violation, 'line_pos', 0),
-                        "code": rule_code,
-                        "description": getattr(violation, 'description', 'No description'),
-                        "rule": rule_name,
-                        "severity": self._get_violation_severity(violation),
-                        "fixable": getattr(violation, 'fixable', False)
-                    }
+                        line_match = re.search(r'Line (\d+)', description)
+                        pos_match = re.search(r'Position (\d+)', description)
+                        if line_match:
+                            line_no = int(line_match.group(1))
+                        if pos_match:
+                            line_pos = int(pos_match.group(1))
+                        
+                        violation_dict = {
+                            "line_no": line_no,
+                            "line_pos": line_pos,
+                            "code": rule_code,
+                            "description": description,
+                            "rule": rule_name,
+                            "severity": "critical",  # 语法错误总是严重的
+                            "fixable": False
+                        }
+                    else:
+                        # 标准SQLLintError对象的处理
+                        violation_dict = {
+                            "line_no": getattr(violation, 'line_no', 0),
+                            "line_pos": getattr(violation, 'line_pos', 0),
+                            "code": rule_code,
+                            "description": getattr(violation, 'description', 'No description'),
+                            "rule": rule_name,
+                            "severity": self._get_violation_severity(violation),
+                            "fixable": getattr(violation, 'fixable', False)
+                        }
                     
                     violations.append(violation_dict)
                     self.logger.debug(f"添加违规项: {violation_dict}")

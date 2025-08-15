@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     # ============= 任务处理配置 =============
     MAX_CONCURRENT_TASKS: int = Field(default=8, description="最大并发任务数", env="MAX_CONCURRENT_TASKS")
     
+    # ============= 规则分级配置 =============
+    RULE_SEVERITY_ENABLED: bool = Field(default=True, description="是否启用规则分级映射功能", env="RULE_SEVERITY_ENABLED")
+    RULE_SEVERITY_CACHE_TTL_SECONDS: int = Field(default=600, description="规则分级映射缓存TTL时间（秒）", env="RULE_SEVERITY_CACHE_TTL_SECONDS")
+    
     @validator('ENVIRONMENT')
     def validate_environment(cls, v):
         """验证环境配置"""
@@ -282,8 +286,19 @@ class Settings(BaseSettings):
         if not self.REDIS_CLUSTER_ENABLED or not self.REDIS_CLUSTER_NODES:
             return {}
         
-        return {
-            'startup_nodes': self.get_redis_cluster_nodes(),
+        # 为 redis-py 5.x 创建正确的 startup_nodes 格式
+        from redis.cluster import ClusterNode
+        
+        startup_nodes = []
+        for node_str in self.REDIS_CLUSTER_NODES.split(','):
+            node_str = node_str.strip()
+            if ':' in node_str:
+                host, port = node_str.split(':', 1)
+                # 使用 ClusterNode 对象而不是字典
+                startup_nodes.append(ClusterNode(host.strip(), int(port.strip())))
+        
+        cluster_settings = {
+            'startup_nodes': startup_nodes,
             'decode_responses': True,
             'skip_full_coverage_check': True,
             'max_connections_per_node': 10,
@@ -299,6 +314,18 @@ class Settings(BaseSettings):
                 'health_check_interval': 30,
             }
         }
+        
+        # 添加认证信息
+        if self.REDIS_PASSWORD:
+            cluster_settings['password'] = self.REDIS_PASSWORD
+            # 更新连接池配置中的认证信息
+            cluster_settings['connection_pool_kwargs']['password'] = self.REDIS_PASSWORD
+            
+        if self.REDIS_USERNAME:
+            cluster_settings['username'] = self.REDIS_USERNAME
+            cluster_settings['connection_pool_kwargs']['username'] = self.REDIS_USERNAME
+        
+        return cluster_settings
     
     def get_nfs_root_path(self) -> str:
         """获取NFS根路径"""
