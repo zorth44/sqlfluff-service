@@ -258,6 +258,12 @@ class LintingTask(Base):
         comment="SQL文件违规项总数"
     )
     
+    critical_violations = Column(
+        Integer,
+        nullable=True,
+        comment="SQL文件严重违规项数(BLOCKER和CRITICAL级别)"
+    )
+    
     # 时间戳字段
     created_at = Column(
         DateTime(6),
@@ -295,6 +301,7 @@ class LintingTask(Base):
             'error_message': self.error_message,
             'sql_lines': self.sql_lines,
             'total_violations': self.total_violations,
+            'critical_violations': self.critical_violations,
             'created_at': self.created_at,
             'updated_at': self.updated_at
         }

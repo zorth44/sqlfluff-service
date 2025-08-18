@@ -454,8 +454,8 @@ def process_sql_file(self, task_id: str):
             # 使用SQLFluff分析SQL文件
             sqlfluff_service = SQLFluffService()
             service_logger.info(f"Analyzing SQL file with SQLFluff: {sql_file_path}, dialect: {job.dialect}, rules: {job.rules}")
-            # 传递相对路径、方言和规则给SQLFluffService
-            analysis_result = sqlfluff_service.analyze_sql_file(task.source_file_path, job.dialect, job.rules)
+            # 传递相对路径、方言和规则给SQLFluffService，并传递数据库会话用于规则分级映射
+            analysis_result = sqlfluff_service.analyze_sql_file(task.source_file_path, job.dialect, job.rules, db)
 
             # 规则分级后处理：写入 severity_level（不影响原有 severity 字段）
             try:
@@ -477,16 +477,18 @@ def process_sql_file(self, task_id: str):
             result_file_path = file_manager.write_json_file(result_relative_path, analysis_result)
             service_logger.info(f"Analysis result saved to: {result_file_path}")
             
-            # 提取违规项总数
+            # 提取违规项总数和严重违规项数
             total_violations = analysis_result.get("summary", {}).get("total_violations", 0)
+            critical_violations_count = analysis_result.get("summary", {}).get("critical_violations_count", 0)
             
             # 更新任务状态为SUCCESS
             task.status = TaskStatusEnum.SUCCESS
             task.result_file_path = result_relative_path
             task.total_violations = total_violations
+            task.critical_violations = critical_violations_count
             db.commit()
             
-            service_logger.info(f"Successfully processed SQL file for task {task_id}, violations: {total_violations}")
+            service_logger.info(f"Successfully processed SQL file for task {task_id}, violations: {total_violations}, critical_violations: {critical_violations_count}")
             
             # 检查并更新父Job状态
             update_job_status_based_on_tasks(task.job_id, db)

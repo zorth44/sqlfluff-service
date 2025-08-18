@@ -192,7 +192,8 @@ start_worker_service() {
     export PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}."
     
     # Redis集群模式的环境变量
-    if [[ "${REDIS_CLUSTER_ENABLED,,}" == "true" ]]; then
+    local redis_cluster_enabled=$(echo "${REDIS_CLUSTER_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')
+    if [[ "$redis_cluster_enabled" == "true" ]]; then
         log_info "启用Redis集群兼容模式"
         # 注意：这些环境变量将通过Celery配置文件设置，而不是环境变量
         # 因为Celery 5.x不允许混用新旧格式
@@ -208,7 +209,7 @@ start_worker_service() {
     celery_cmd="$celery_cmd --queues=$queues"
     
     # Redis集群模式添加额外参数
-    if [[ "${REDIS_CLUSTER_ENABLED,,}" == "true" ]]; then
+    if [[ "$redis_cluster_enabled" == "true" ]]; then
         celery_cmd="$celery_cmd --without-mingle --without-gossip --without-heartbeat"
         log_info "Redis集群模式：已添加 --without-mingle --without-gossip --without-heartbeat 参数"
     fi

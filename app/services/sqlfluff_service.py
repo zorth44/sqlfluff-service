@@ -16,6 +16,7 @@ from app.core.exceptions import SQLFluffException
 from app.core.logging import service_logger
 from app.utils.file_utils import FileManager
 from app.config.settings import get_settings
+from app.services.rule_severity_mapper import RuleSeverityMapper
 
 settings = get_settings()
 
@@ -148,7 +149,7 @@ class SQLFluffService:
             self.logger.warning(f"规则过滤失败，使用原始linter: {e}")
             return linter
     
-    def analyze_sql_file(self, file_path: str, dialect: Optional[str] = None, rules: Optional[List[str]] = None) -> Dict[str, Any]:
+    def analyze_sql_file(self, file_path: str, dialect: Optional[str] = None, rules: Optional[List[str]] = None, db_session=None) -> Dict[str, Any]:
         """
         分析单个SQL文件
         
@@ -183,7 +184,7 @@ class SQLFluffService:
             file_info = self._get_file_info(relative_path)
             
             # 执行分析
-            result = self.analyze_sql_content(sql_content, os.path.basename(file_path), dialect, rules)
+            result = self.analyze_sql_content(sql_content, os.path.basename(file_path), dialect, rules, db_session)
             
             # 更新文件信息
             result['file_info'].update(file_info)
@@ -197,7 +198,7 @@ class SQLFluffService:
                 raise
             raise SQLFluffException("分析SQL文件", file_path, str(e))
     
-    def analyze_sql_content(self, sql_content: str, file_name: str = "query.sql", dialect: Optional[str] = None, rules: Optional[List[str]] = None) -> Dict[str, Any]:
+    def analyze_sql_content(self, sql_content: str, file_name: str = "query.sql", dialect: Optional[str] = None, rules: Optional[List[str]] = None, db_session=None) -> Dict[str, Any]:
         """
         分析SQL内容字符串
         
@@ -250,7 +251,7 @@ class SQLFluffService:
                     self.logger.debug(f"简单API获取解析树失败: {file_name}, 错误: {e}")
             
             # 格式化结果
-            formatted_result = self._format_lint_result(lint_result, sql_content, file_name, used_dialect, linter, parse_tree_info)
+            formatted_result = self._format_lint_result(lint_result, sql_content, file_name, used_dialect, linter, parse_tree_info, db_session)
             
             self.logger.debug(f"SQL内容分析完成: {file_name}, 方言: {used_dialect}")
             return formatted_result
@@ -401,12 +402,23 @@ class SQLFluffService:
         except Exception as e:
             raise SQLFluffException("读取SQL文件", relative_path, f"文件读取失败: {str(e)}")
     
-    def _format_lint_result(self, lint_result, sql_content: str, file_name: str, dialect: str, linter: Linter, parse_tree: Optional[Dict] = None) -> Dict[str, Any]:
+    def _format_lint_result(self, lint_result, sql_content: str, file_name: str, dialect: str, linter: Linter, parse_tree: Optional[Dict] = None, db_session=None) -> Dict[str, Any]:
         """格式化分析结果为标准JSON格式"""
         try:
             violations = []
             critical_count = 0
             warning_count = 0
+            critical_violations_count = 0  # BLOCKER和CRITICAL级别的违规数
+            
+            # 获取规则分级映射
+            severity_mapping = {}
+            if db_session:
+                try:
+                    severity_mapping = RuleSeverityMapper.get_mapping_for_dialect(db_session, dialect)
+                    self.logger.debug(f"获取到 {len(severity_mapping)} 个规则分级映射，方言: {dialect}")
+                except Exception as e:
+                    self.logger.warning(f"获取规则分级映射失败: {e}")
+                    severity_mapping = {}
             
             # 处理违规项 - SQLFluff返回的是一个复杂的结构
             # 需要找到其中的SQLLintError列表
@@ -531,6 +543,9 @@ class SQLFluffService:
                         if pos_match:
                             line_pos = int(pos_match.group(1))
                         
+                        # 获取真实的严重等级
+                        severity_level = severity_mapping.get(rule_code, None)
+                        
                         violation_dict = {
                             "line_no": line_no,
                             "line_pos": line_pos,
@@ -538,10 +553,14 @@ class SQLFluffService:
                             "description": description,
                             "rule": rule_name,
                             "severity": "critical",  # 语法错误总是严重的
+                            "severity_level": severity_level,
                             "fixable": False
                         }
                     else:
                         # 标准SQLLintError对象的处理
+                        # 获取真实的严重等级
+                        severity_level = severity_mapping.get(rule_code, None)
+                        
                         violation_dict = {
                             "line_no": getattr(violation, 'line_no', 0),
                             "line_pos": getattr(violation, 'line_pos', 0),
@@ -549,6 +568,7 @@ class SQLFluffService:
                             "description": getattr(violation, 'description', 'No description'),
                             "rule": rule_name,
                             "severity": self._get_violation_severity(violation),
+                            "severity_level": severity_level,
                             "fixable": getattr(violation, 'fixable', False)
                         }
                     
@@ -560,6 +580,12 @@ class SQLFluffService:
                         critical_count += 1
                     else:
                         warning_count += 1
+                    
+                    # 统计BLOCKER和CRITICAL级别的违规项
+                    severity_level = violation_dict.get("severity_level")
+                    if severity_level and severity_level.upper() in ["BLOCKER", "CRITICAL"]:
+                        critical_violations_count += 1
+                        self.logger.debug(f"检测到严重违规项: {rule_code}, 级别: {severity_level}")
                         
                 except Exception as e:
                     self.logger.error(f"处理违规项失败: {violation}, 错误: {e}")
@@ -579,6 +605,7 @@ class SQLFluffService:
                     "total_violations": total_violations,
                     "critical_violations": critical_count,
                     "warning_violations": warning_count,
+                    "critical_violations_count": critical_violations_count,  # BLOCKER和CRITICAL级别的违规数
                     "file_passed": file_passed,
                     "success_rate": 0 if total_violations > 0 else 100
                 },
