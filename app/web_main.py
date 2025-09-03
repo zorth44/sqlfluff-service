@@ -21,7 +21,7 @@ import uuid
 from typing import Union
 from contextlib import asynccontextmanager
 
-from app.api.routes import jobs, tasks, health
+from app.api.routes import jobs, tasks, health, sql
 from app.config.settings import get_settings
 from app.core.logging import setup_logging, api_logger
 from app.core.exceptions import BaseException as BusinessException, get_http_status_code
@@ -336,6 +336,16 @@ def _register_routes(app: FastAPI):
         tags=["health"],
         responses={
             503: {"description": "服务不可用"}
+        }
+    )
+    
+    app.include_router(
+        sql.router,
+        prefix="/api/v1/sql",
+        tags=["sql"],
+        responses={
+            400: {"description": "请求参数错误"},
+            500: {"description": "内部服务器错误"}
         }
     )
     

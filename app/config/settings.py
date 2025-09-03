@@ -93,6 +93,10 @@ class Settings(BaseSettings):
     SQLFLUFF_DIALECT: str = Field(default="mysql", description="SQLFluff方言")
     SQLFLUFF_CONFIG_PATH: Optional[str] = Field(default=None, description="SQLFluff配置文件路径")
     
+    # SQL检查接口配置
+    HIVE_RULES: str = Field(default="", description="Hive方言规则列表，逗号分隔", env="HIVE_RULES")
+    GBASE8A_RULES: str = Field(default="", description="GBase8a方言规则列表，逗号分隔", env="GBASE8A_RULES")
+    
     # ============= 文件处理配置 =============
     MAX_FILE_SIZE: int = Field(default=50 * 1024 * 1024, description="最大文件大小(字节)")
     MAX_ZIP_FILES: int = Field(default=1000, description="ZIP包中最大文件数")
