@@ -17,7 +17,7 @@ from app.services.task_service import TaskService
 from app.schemas.task import (
     TaskDetailResponse, TaskResultContent, TaskListResponse,
     TaskStatistics, TaskRetryRequest, TaskRetryResponse,
-    TaskLintResultResponse
+    TaskLintResultResponse, SeverityLevelStatistics
 )
 from app.schemas.common import TaskStatusEnum
 from app.core.logging import api_logger
@@ -377,4 +377,67 @@ async def get_pending_tasks(
         
     except Exception as e:
         api_logger.error(f"获取待处理任务失败: {e}")
-        raise handle_service_exception(e, "获取待处理任务") 
+        raise handle_service_exception(e, "获取待处理任务")
+
+
+@router.get("/tasks/severity-statistics", response_model=SeverityLevelStatistics)
+async def get_severity_level_statistics(
+    job_id: str = Query(..., description="Job ID"),
+    task_service: TaskService = Depends(get_task_service)
+):
+    """
+    获取Severity Level统计信息
+    
+    统计指定Job下所有任务结果中不同severity_level的违规项数量分布。
+    只统计状态为SUCCESS的任务。
+    """
+    try:
+        api_logger.info(f"获取Severity Level统计: {job_id}")
+        
+        # 调用业务服务获取统计信息
+        statistics = await task_service.get_severity_level_statistics(job_id)
+        
+        api_logger.debug(f"Severity Level统计查询成功: {job_id}")
+        return statistics
+        
+    except Exception as e:
+        api_logger.error(f"获取Severity Level统计失败: {job_id}, 错误: {e}")
+        raise handle_service_exception(e, "获取Severity Level统计")
+
+
+@router.get("/tasks/by-severity-level", response_model=TaskListResponse)
+async def get_tasks_by_severity_level(
+    job_id: str = Query(..., description="Job ID"),
+    severity_level: str = Query(..., description="Severity Level (INFO/MINOR/MAJOR/BLOCKER/CRITICAL/UNKNOWN)"),
+    pagination: tuple[int, int] = Depends(get_pagination_params),
+    status_filter: Optional[TaskStatusEnum] = Query(None, alias="status", description="状态过滤"),
+    violation_exists: Optional[bool] = Query(None, description="是否有违规项过滤，true表示只显示有违规的任务，false表示只显示无违规的任务"),
+    task_service: TaskService = Depends(get_task_service)
+):
+    """
+    按Severity Level获取任务列表
+    
+    返回指定Job下包含指定severity_level违规项的任务列表，支持分页和过滤。
+    只查询状态为SUCCESS的任务。
+    """
+    try:
+        page, size = pagination
+        api_logger.info(f"按Severity Level查询任务列表: Job={job_id}, Level={severity_level}, 页码={page}, 大小={size}")
+        
+        # 调用业务服务查询任务列表
+        task_list = await task_service.get_tasks_by_severity_level(
+            job_id=job_id,
+            severity_level=severity_level,
+            page=page,
+            size=size,
+            status=status_filter,
+            violation_exists=violation_exists
+        )
+        
+        response = TaskListResponse(tasks=task_list)
+        api_logger.debug(f"按Severity Level查询任务成功: {job_id}, 总数={task_list.total}")
+        return response
+        
+    except Exception as e:
+        api_logger.error(f"按Severity Level查询任务失败: {job_id}, Level={severity_level}, 错误: {e}")
+        raise handle_service_exception(e, "按Severity Level查询任务列表") 

@@ -358,4 +358,26 @@ class TaskProgressResponse(BaseModel):
                 "current_step": "执行SQLFluff分析",
                 "estimated_completion": "2025-06-27T09:32:00.123456"
             }
+        }
+
+
+class SeverityLevelStatistics(BaseModel):
+    """Severity Level统计信息"""
+    INFO: int = Field(default=0, description="INFO级别违规项数量")
+    MINOR: int = Field(default=0, description="MINOR级别违规项数量") 
+    MAJOR: int = Field(default=0, description="MAJOR级别违规项数量")
+    BLOCKER: int = Field(default=0, description="BLOCKER级别违规项数量")
+    CRITICAL: int = Field(default=0, description="CRITICAL级别违规项数量")
+    UNKNOWN: int = Field(default=0, description="未知级别违规项数量")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "INFO": 15,
+                "MINOR": 8,
+                "MAJOR": 12,
+                "BLOCKER": 2,
+                "CRITICAL": 1,
+                "UNKNOWN": 3
+            }
         } 

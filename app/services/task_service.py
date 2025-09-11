@@ -10,12 +10,13 @@ from sqlalchemy import func, and_, or_
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta
 import os
+import json
 
 from app.models.database import LintingJob, LintingTask
 from app.schemas.task import (
     TaskResponse, TaskDetailResponse, TaskResultContent,
     TaskStatusUpdateRequest, TaskStatistics, TaskFileInfo,
-    TaskLintResultResponse, TaskViolationWithSQL
+    TaskLintResultResponse, TaskViolationWithSQL, SeverityLevelStatistics
 )
 from app.schemas.common import PaginationResponse, TaskStatusEnum
 from app.core.exceptions import TaskException, JobException, FileException, ErrorCode, DatabaseException
@@ -629,4 +630,222 @@ class TaskService:
             
         except Exception as e:
             self.logger.error(f"更新Job状态失败: {job_id}, {e}")
-            # 不抛出异常，避免影响Task状态更新 
+            # 不抛出异常，避免影响Task状态更新
+    
+    async def get_severity_level_statistics(self, job_id: str) -> SeverityLevelStatistics:
+        """
+        获取指定Job下所有任务的Severity Level统计信息
+        
+        Args:
+            job_id: Job ID
+            
+        Returns:
+            SeverityLevelStatistics: severity level统计信息
+        """
+        try:
+            self.logger.info(f"获取Job的Severity Level统计: {job_id}")
+            
+            # 验证Job是否存在
+            job = self.db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+            if not job:
+                raise JobException(ErrorCode.JOB_NOT_FOUND, job_id, f"Job不存在: {job_id}")
+            
+            # 获取该Job下所有成功的任务
+            tasks = self.db.query(LintingTask).filter(
+                LintingTask.job_id == job_id,
+                LintingTask.status == TaskStatusEnum.SUCCESS,
+                LintingTask.result_file_path.isnot(None)
+            ).all()
+            
+            # 初始化统计计数器
+            statistics = {
+                "INFO": 0,
+                "MINOR": 0,
+                "MAJOR": 0,
+                "BLOCKER": 0,
+                "CRITICAL": 0,
+                "UNKNOWN": 0
+            }
+            
+            # 遍历所有任务的结果文件
+            for task in tasks:
+                try:
+                    # 读取结果文件
+                    result_content = self.file_manager.read_json_file(task.result_file_path)
+                    if not result_content:
+                        continue
+                    
+                    violations = result_content.get('violations', [])
+                    
+                    # 统计每个violation的severity_level
+                    for violation in violations:
+                        severity_level = violation.get('severity_level')
+                        
+                        # 处理不同的severity_level值
+                        if severity_level is None or severity_level == "null":
+                            statistics["UNKNOWN"] += 1
+                        elif severity_level in statistics:
+                            statistics[severity_level] += 1
+                        else:
+                            # 对于未知的severity_level值，归类为UNKNOWN
+                            statistics["UNKNOWN"] += 1
+                            
+                except Exception as e:
+                    self.logger.warning(f"读取任务结果文件失败: {task.task_id}, {e}")
+                    continue
+            
+            result = SeverityLevelStatistics(**statistics)
+            
+            total_violations = sum(statistics.values())
+            self.logger.info(f"Severity Level统计完成: {job_id}, 总违规项数: {total_violations}")
+            
+            return result
+            
+        except JobException:
+            raise
+        except Exception as e:
+            self.logger.error(f"获取Severity Level统计失败: {job_id}, {e}")
+            raise TaskException(ErrorCode.TASK_QUERY_FAILED, "severity_statistics", str(e))
+    
+    async def get_tasks_by_severity_level(
+        self,
+        job_id: str,
+        severity_level: str,
+        page: int = 1,
+        size: int = 10,
+        status: Optional[TaskStatusEnum] = None,
+        violation_exists: Optional[bool] = None
+    ) -> PaginationResponse[TaskResponse]:
+        """
+        获取指定Job和Severity Level的任务列表（支持分页）
+        
+        Args:
+            job_id: Job ID
+            severity_level: 要过滤的severity level (INFO/MINOR/MAJOR/BLOCKER/CRITICAL)
+            page: 页码
+            size: 每页大小
+            status: 任务状态过滤
+            violation_exists: 是否有违规项过滤
+            
+        Returns:
+            PaginationResponse[TaskResponse]: 分页的任务列表
+        """
+        try:
+            self.logger.info(f"按Severity Level查询任务列表: {job_id}, level={severity_level}, 页码={page}, 大小={size}")
+            
+            # 验证Job是否存在
+            job = self.db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+            if not job:
+                raise JobException(ErrorCode.JOB_NOT_FOUND, job_id, f"Job不存在: {job_id}")
+            
+            # 验证severity_level参数
+            valid_levels = {"INFO", "MINOR", "MAJOR", "BLOCKER", "CRITICAL", "UNKNOWN"}
+            if severity_level not in valid_levels:
+                raise TaskException(
+                    ErrorCode.TASK_QUERY_FAILED, 
+                    "severity_level_filter", 
+                    f"无效的severity_level: {severity_level}, 必须是: {', '.join(valid_levels)}"
+                )
+            
+            # 构建查询条件
+            query = self.db.query(LintingTask).filter(LintingTask.job_id == job_id)
+            
+            # 添加状态过滤
+            if status:
+                query = query.filter(LintingTask.status == status)
+            
+            # 获取所有任务
+            all_tasks = query.all()
+            
+            # 过滤出包含指定severity_level的任务
+            matching_tasks = []
+            
+            for task in all_tasks:
+                # 跳过没有结果文件的任务
+                if not task.result_file_path or task.status != TaskStatusEnum.SUCCESS:
+                    continue
+                
+                try:
+                    # 读取结果文件
+                    result_content = self.file_manager.read_json_file(task.result_file_path)
+                    if not result_content:
+                        continue
+                    
+                    violations = result_content.get('violations', [])
+                    
+                    # 检查是否有匹配的severity_level
+                    has_matching_level = False
+                    
+                    for violation in violations:
+                        violation_level = violation.get('severity_level')
+                        
+                        # 处理UNKNOWN级别的匹配
+                        if severity_level == "UNKNOWN" and (violation_level is None or violation_level == "null"):
+                            has_matching_level = True
+                            break
+                        elif violation_level == severity_level:
+                            has_matching_level = True
+                            break
+                    
+                    if has_matching_level:
+                        matching_tasks.append(task)
+                        
+                except Exception as e:
+                    self.logger.warning(f"读取任务结果文件失败: {task.task_id}, {e}")
+                    continue
+            
+            # 应用violation_exists过滤（如果有）
+            if violation_exists is not None:
+                if violation_exists:
+                    # 只保留有违规的任务
+                    matching_tasks = [t for t in matching_tasks if t.total_violations and t.total_violations > 0]
+                else:
+                    # 只保留无违规的任务
+                    matching_tasks = [t for t in matching_tasks if not t.total_violations or t.total_violations == 0]
+            
+            # 计算分页信息
+            total = len(matching_tasks)
+            total_pages = (total + size - 1) // size if total > 0 else 1
+            
+            # 分页切片
+            start_idx = (page - 1) * size
+            end_idx = start_idx + size
+            page_tasks = matching_tasks[start_idx:end_idx]
+            
+            # 转换为响应格式
+            task_responses = []
+            for task in page_tasks:
+                task_response = TaskResponse(
+                    task_id=task.task_id,
+                    file_name=task.file_name,
+                    status=task.status,
+                    result_file_path=task.result_file_path,
+                    error_message=task.error_message,
+                    created_at=task.created_at,
+                    updated_at=task.updated_at,
+                    sql_lines=task.sql_lines,
+                    total_violations=task.total_violations,
+                    critical_violations=task.critical_violations
+                )
+                task_responses.append(task_response)
+            
+            # 构造分页响应
+            pagination_response = PaginationResponse(
+                total=total,
+                page=page,
+                size=size,
+                pages=total_pages,
+                has_next=page < total_pages,
+                has_prev=page > 1,
+                items=task_responses
+            )
+            
+            self.logger.info(f"按Severity Level查询任务完成: {job_id}, 匹配任务数: {total}")
+            
+            return pagination_response
+            
+        except (JobException, TaskException):
+            raise
+        except Exception as e:
+            self.logger.error(f"按Severity Level查询任务失败: {job_id}, {e}")
+            raise TaskException(ErrorCode.TASK_QUERY_FAILED, "severity_level_filter", str(e)) 
