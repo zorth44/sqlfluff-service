@@ -636,7 +636,10 @@ class JobService:
             extracted_dir, sql_files = self.file_manager.extract_zip_file(zip_path, extract_to)
             
             if not sql_files:
-                raise JobException(ErrorCode.FILE_NOT_FOUND, job_id, "ZIP文件中没有找到SQL文件")
+                # 没有SQL文件时，直接将Job状态设置为COMPLETED，而不是抛出异常
+                await self.update_job_status(job_id, JobStatusEnum.COMPLETED)
+                self.logger.info(f"Job {job_id} 的ZIP文件中没有找到SQL文件，直接标记为完成")
+                return
             
             # 批量创建Task
             from app.services.task_service import TaskService
@@ -670,7 +673,10 @@ class JobService:
             )
             
             if not sql_files:
-                raise JobException(ErrorCode.FILE_NOT_FOUND, job_id, "解压后的文件夹中没有找到SQL文件")
+                # 没有SQL文件时，直接将Job状态设置为COMPLETED，而不是抛出异常
+                await self.update_job_status(job_id, JobStatusEnum.COMPLETED)
+                self.logger.info(f"Job {job_id} 的解压后文件夹中没有找到SQL文件，直接标记为完成")
+                return
             
             # 批量创建Task
             from app.services.task_service import TaskService
@@ -758,11 +764,11 @@ class JobService:
     def _is_valid_status_transition(self, current_status: JobStatusEnum, new_status: JobStatusEnum) -> bool:
         """验证状态转换是否有效"""
         valid_transitions = {
-            JobStatusEnum.ACCEPTED: [JobStatusEnum.PROCESSING, JobStatusEnum.FAILED],
+            JobStatusEnum.ACCEPTED: [JobStatusEnum.PROCESSING, JobStatusEnum.COMPLETED, JobStatusEnum.FAILED],
             JobStatusEnum.PROCESSING: [JobStatusEnum.COMPLETED, JobStatusEnum.PARTIALLY_COMPLETED, JobStatusEnum.FAILED],
             JobStatusEnum.COMPLETED: [],  # 完成状态不能转换
             JobStatusEnum.PARTIALLY_COMPLETED: [],  # 部分完成状态不能转换
             JobStatusEnum.FAILED: [JobStatusEnum.PROCESSING]  # 失败状态可以重新处理
         }
-        
+
         return new_status in valid_transitions.get(current_status, []) 
