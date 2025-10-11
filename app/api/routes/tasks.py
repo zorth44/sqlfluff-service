@@ -17,7 +17,7 @@ from app.services.task_service import TaskService
 from app.schemas.task import (
     TaskDetailResponse, TaskResultContent, TaskListResponse,
     TaskStatistics, TaskRetryRequest, TaskRetryResponse,
-    TaskLintResultResponse, SeverityLevelStatistics
+    TaskLintResultResponse, SeverityLevelStatistics, TaskSeverityCalculateResponse
 )
 from app.schemas.common import TaskStatusEnum
 from app.core.logging import api_logger
@@ -440,4 +440,34 @@ async def get_tasks_by_severity_level(
         
     except Exception as e:
         api_logger.error(f"按Severity Level查询任务失败: {job_id}, Level={severity_level}, 错误: {e}")
-        raise handle_service_exception(e, "按Severity Level查询任务列表") 
+        raise handle_service_exception(e, "按Severity Level查询任务列表")
+
+
+@router.post("/tasks/calculate-severity-statistics", response_model=TaskSeverityCalculateResponse)
+async def calculate_all_severity_statistics(
+    task_service: TaskService = Depends(get_task_service)
+):
+    """
+    批量计算所有任务的Severity Level统计信息（临时接口）
+    
+    遍历数据库中的所有任务，读取每个任务的结果JSON文件，
+    统计不同severity_level的违规项数量，并更新到数据库字段。
+    
+    注意：
+    - 只处理状态为SUCCESS且有结果文件的任务
+    - 对于JSON中没有violations或severity_level字段的情况，会将所有字段设为0或归类为UNKNOWN
+    - 任何单个任务的失败不会中断整个批量操作
+    - 支持重新计算已有数据
+    """
+    try:
+        api_logger.info("开始批量计算所有任务的Severity Level统计")
+        
+        # 调用业务服务进行批量计算
+        result = await task_service.batch_calculate_all_severity_statistics()
+        
+        api_logger.info(f"批量计算完成: 总计={result.total_processed}, 成功={result.success_count}, 失败={result.failed_count}, 跳过={result.skipped_count}")
+        return result
+        
+    except Exception as e:
+        api_logger.error(f"批量计算Severity Level统计失败: {e}")
+        raise handle_service_exception(e, "批量计算Severity Level统计") 

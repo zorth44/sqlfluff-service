@@ -29,6 +29,12 @@ class TaskResponse(BaseModel):
     sql_lines: Optional[int] = Field(default=None, description="SQL文件行数")
     total_violations: Optional[int] = Field(default=None, description="违规项总数")
     critical_violations: Optional[int] = Field(default=None, description="严重违规项数(BLOCKER和CRITICAL级别)")
+    severity_info: Optional[int] = Field(default=None, description="INFO级别违规项数量")
+    severity_minor: Optional[int] = Field(default=None, description="MINOR级别违规项数量")
+    severity_major: Optional[int] = Field(default=None, description="MAJOR级别违规项数量")
+    severity_blocker: Optional[int] = Field(default=None, description="BLOCKER级别违规项数量")
+    severity_critical: Optional[int] = Field(default=None, description="CRITICAL级别违规项数量")
+    severity_unknown: Optional[int] = Field(default=None, description="UNKNOWN级别违规项数量")
     
     class Config:
         json_encoders = {
@@ -62,6 +68,12 @@ class TaskDetailResponse(BaseModel):
     sql_lines: Optional[int] = Field(default=None, description="SQL文件行数")
     total_violations: Optional[int] = Field(default=None, description="违规项总数")
     critical_violations: Optional[int] = Field(default=None, description="严重违规项数(BLOCKER和CRITICAL级别)")
+    severity_info: Optional[int] = Field(default=None, description="INFO级别违规项数量")
+    severity_minor: Optional[int] = Field(default=None, description="MINOR级别违规项数量")
+    severity_major: Optional[int] = Field(default=None, description="MAJOR级别违规项数量")
+    severity_blocker: Optional[int] = Field(default=None, description="BLOCKER级别违规项数量")
+    severity_critical: Optional[int] = Field(default=None, description="CRITICAL级别违规项数量")
+    severity_unknown: Optional[int] = Field(default=None, description="UNKNOWN级别违规项数量")
     
     class Config:
         json_encoders = {
@@ -379,5 +391,30 @@ class SeverityLevelStatistics(BaseModel):
                 "BLOCKER": 2,
                 "CRITICAL": 1,
                 "UNKNOWN": 3
+            }
+        }
+
+
+class TaskSeverityCalculateResponse(BaseModel):
+    """任务Severity Level计算响应模型"""
+    total_processed: int = Field(description="处理的任务总数")
+    success_count: int = Field(description="成功计算的任务数")
+    failed_count: int = Field(description="失败的任务数")
+    skipped_count: int = Field(description="跳过的任务数")
+    failed_tasks: List[Dict[str, str]] = Field(description="失败的任务列表")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "total_processed": 150,
+                "success_count": 140,
+                "failed_count": 5,
+                "skipped_count": 5,
+                "failed_tasks": [
+                    {
+                        "task_id": "task-xxx",
+                        "reason": "结果文件不存在"
+                    }
+                ]
             }
         } 

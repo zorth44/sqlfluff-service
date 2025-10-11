@@ -16,7 +16,8 @@ from app.models.database import LintingJob, LintingTask
 from app.schemas.task import (
     TaskResponse, TaskDetailResponse, TaskResultContent,
     TaskStatusUpdateRequest, TaskStatistics, TaskFileInfo,
-    TaskLintResultResponse, TaskViolationWithSQL, SeverityLevelStatistics
+    TaskLintResultResponse, TaskViolationWithSQL, SeverityLevelStatistics,
+    TaskSeverityCalculateResponse
 )
 from app.schemas.common import PaginationResponse, TaskStatusEnum
 from app.core.exceptions import TaskException, JobException, FileException, ErrorCode, DatabaseException
@@ -149,7 +150,13 @@ class TaskService:
                 processing_duration=processing_duration,
                 sql_lines=task.sql_lines,
                 total_violations=task.total_violations,
-                critical_violations=task.critical_violations
+                critical_violations=task.critical_violations,
+                severity_info=task.severity_info,
+                severity_minor=task.severity_minor,
+                severity_major=task.severity_major,
+                severity_blocker=task.severity_blocker,
+                severity_critical=task.severity_critical,
+                severity_unknown=task.severity_unknown
             )
             
         except Exception as e:
@@ -256,7 +263,13 @@ class TaskService:
                     updated_at=task.updated_at,
                     sql_lines=task.sql_lines,
                     total_violations=task.total_violations,
-                    critical_violations=task.critical_violations
+                    critical_violations=task.critical_violations,
+                    severity_info=task.severity_info,
+                    severity_minor=task.severity_minor,
+                    severity_major=task.severity_major,
+                    severity_blocker=task.severity_blocker,
+                    severity_critical=task.severity_critical,
+                    severity_unknown=task.severity_unknown
                 ))
             
             # 构造分页响应
@@ -825,7 +838,13 @@ class TaskService:
                     updated_at=task.updated_at,
                     sql_lines=task.sql_lines,
                     total_violations=task.total_violations,
-                    critical_violations=task.critical_violations
+                    critical_violations=task.critical_violations,
+                    severity_info=task.severity_info,
+                    severity_minor=task.severity_minor,
+                    severity_major=task.severity_major,
+                    severity_blocker=task.severity_blocker,
+                    severity_critical=task.severity_critical,
+                    severity_unknown=task.severity_unknown
                 )
                 task_responses.append(task_response)
             
@@ -848,4 +867,132 @@ class TaskService:
             raise
         except Exception as e:
             self.logger.error(f"按Severity Level查询任务失败: {job_id}, {e}")
-            raise TaskException(ErrorCode.TASK_QUERY_FAILED, "severity_level_filter", str(e)) 
+            raise TaskException(ErrorCode.TASK_QUERY_FAILED, "severity_level_filter", str(e))
+    
+    async def batch_calculate_all_severity_statistics(self) -> TaskSeverityCalculateResponse:
+        """
+        批量计算所有任务的Severity Level统计信息并更新到数据库
+        
+        遍历数据库中的所有任务，读取每个任务的结果JSON文件，
+        统计不同severity_level的违规项数量，并更新到数据库字段。
+        
+        Returns:
+            TaskSeverityCalculateResponse: 处理结果统计
+        """
+        try:
+            self.logger.info("开始批量计算所有任务的Severity Level统计")
+            
+            # 查询所有任务
+            all_tasks = self.db.query(LintingTask).all()
+            
+            total_processed = len(all_tasks)
+            success_count = 0
+            failed_count = 0
+            skipped_count = 0
+            failed_tasks = []
+            
+            for task in all_tasks:
+                try:
+                    # 检查任务状态
+                    if task.status != TaskStatusEnum.SUCCESS:
+                        skipped_count += 1
+                        self.logger.debug(f"跳过非SUCCESS状态的任务: {task.task_id}, 状态: {task.status}")
+                        continue
+                    
+                    # 检查是否有结果文件路径
+                    if not task.result_file_path:
+                        skipped_count += 1
+                        self.logger.debug(f"跳过没有结果文件的任务: {task.task_id}")
+                        continue
+                    
+                    # 检查结果文件是否存在
+                    if not self.file_manager.file_exists(task.result_file_path):
+                        failed_count += 1
+                        failed_tasks.append({
+                            "task_id": task.task_id,
+                            "reason": "结果文件不存在"
+                        })
+                        self.logger.warning(f"任务结果文件不存在: {task.task_id}, 路径: {task.result_file_path}")
+                        continue
+                    
+                    # 读取结果文件
+                    try:
+                        result_content = self.file_manager.read_json_file(task.result_file_path)
+                    except Exception as e:
+                        failed_count += 1
+                        failed_tasks.append({
+                            "task_id": task.task_id,
+                            "reason": f"读取JSON文件失败: {str(e)}"
+                        })
+                        self.logger.warning(f"读取结果文件失败: {task.task_id}, 错误: {e}")
+                        continue
+                    
+                    # 初始化统计计数器
+                    statistics = {
+                        "INFO": 0,
+                        "MINOR": 0,
+                        "MAJOR": 0,
+                        "BLOCKER": 0,
+                        "CRITICAL": 0,
+                        "UNKNOWN": 0
+                    }
+                    
+                    # 获取violations列表
+                    violations = result_content.get('violations', [])
+                    
+                    # 统计每个violation的severity_level
+                    for violation in violations:
+                        severity_level = violation.get('severity_level')
+                        
+                        # 处理不同的severity_level值
+                        if severity_level is None or severity_level == "null":
+                            statistics["UNKNOWN"] += 1
+                        elif severity_level in statistics:
+                            statistics[severity_level] += 1
+                        else:
+                            # 对于未知的severity_level值，归类为UNKNOWN
+                            statistics["UNKNOWN"] += 1
+                    
+                    # 更新数据库字段
+                    task.severity_info = statistics["INFO"]
+                    task.severity_minor = statistics["MINOR"]
+                    task.severity_major = statistics["MAJOR"]
+                    task.severity_blocker = statistics["BLOCKER"]
+                    task.severity_critical = statistics["CRITICAL"]
+                    task.severity_unknown = statistics["UNKNOWN"]
+                    
+                    success_count += 1
+                    self.logger.debug(f"任务统计计算成功: {task.task_id}, 统计: {statistics}")
+                    
+                except Exception as e:
+                    # 单个任务的异常不应该中断整个批量操作
+                    failed_count += 1
+                    failed_tasks.append({
+                        "task_id": task.task_id,
+                        "reason": f"处理异常: {str(e)}"
+                    })
+                    self.logger.error(f"计算任务Severity统计失败: {task.task_id}, 错误: {e}")
+                    continue
+            
+            # 提交所有更新
+            try:
+                self.db.commit()
+                self.logger.info(f"批量计算完成，总计: {total_processed}, 成功: {success_count}, 失败: {failed_count}, 跳过: {skipped_count}")
+            except Exception as e:
+                self.db.rollback()
+                self.logger.error(f"提交数据库更新失败: {e}")
+                raise DatabaseException("批量更新Severity统计", str(e))
+            
+            return TaskSeverityCalculateResponse(
+                total_processed=total_processed,
+                success_count=success_count,
+                failed_count=failed_count,
+                skipped_count=skipped_count,
+                failed_tasks=failed_tasks
+            )
+            
+        except DatabaseException:
+            raise
+        except Exception as e:
+            self.logger.error(f"批量计算Severity Level统计失败: {e}")
+            raise TaskException(ErrorCode.TASK_QUERY_FAILED, "batch_calculate_severity", str(e)) 

@@ -264,6 +264,43 @@ class LintingTask(Base):
         comment="SQL文件严重违规项数(BLOCKER和CRITICAL级别)"
     )
     
+    # Severity Level 统计字段
+    severity_info = Column(
+        Integer,
+        nullable=True,
+        comment="INFO级别违规项数量"
+    )
+    
+    severity_minor = Column(
+        Integer,
+        nullable=True,
+        comment="MINOR级别违规项数量"
+    )
+    
+    severity_major = Column(
+        Integer,
+        nullable=True,
+        comment="MAJOR级别违规项数量"
+    )
+    
+    severity_blocker = Column(
+        Integer,
+        nullable=True,
+        comment="BLOCKER级别违规项数量"
+    )
+    
+    severity_critical = Column(
+        Integer,
+        nullable=True,
+        comment="CRITICAL级别违规项数量"
+    )
+    
+    severity_unknown = Column(
+        Integer,
+        nullable=True,
+        comment="UNKNOWN级别违规项数量"
+    )
+    
     # 时间戳字段
     created_at = Column(
         DateTime(6),
@@ -302,6 +339,12 @@ class LintingTask(Base):
             'sql_lines': self.sql_lines,
             'total_violations': self.total_violations,
             'critical_violations': self.critical_violations,
+            'severity_info': self.severity_info,
+            'severity_minor': self.severity_minor,
+            'severity_major': self.severity_major,
+            'severity_blocker': self.severity_blocker,
+            'severity_critical': self.severity_critical,
+            'severity_unknown': self.severity_unknown,
             'created_at': self.created_at,
             'updated_at': self.updated_at
         }
