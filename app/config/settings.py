@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     CONSUL_SERVICE_NAME: str = Field(default="sql-linting-service", description="服务名称")
     CONSUL_SERVICE_PORT: int = Field(default=8000, description="服务端口")
     CONSUL_SERVICE_IP: Optional[str] = Field(default=None, description="服务注册IP地址，未设置时自动检测", env="CONSUL_SERVICE_IP")
+    CONSUL_SERVICE_ID: Optional[str] = Field(default=None, description="服务实例ID（可选，默认自动生成：服务名-主机名-端口）", env="CONSUL_SERVICE_ID")
     CONSUL_HEALTH_CHECK_INTERVAL: str = Field(default="10s", description="健康检查间隔")
     
     # ============= 日志配置 =============

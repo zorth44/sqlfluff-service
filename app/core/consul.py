@@ -42,10 +42,22 @@ class ConsulClient:
             raise
     
     def _generate_service_id(self):
-        """生成唯一的服务实例ID"""
+        """
+        生成服务实例ID
+        
+        使用固定的格式：服务名-主机名-端口号
+        确保同一台机器上相同端口的服务在重启后保持相同的ID
+        """
+        # 优先使用环境变量手动指定（用于特殊场景）
+        if hasattr(settings, 'CONSUL_SERVICE_ID') and settings.CONSUL_SERVICE_ID:
+            self.service_id = settings.CONSUL_SERVICE_ID
+            self.logger.info(f"使用环境变量指定的服务实例ID: {self.service_id}")
+            return
+        
+        # 自动生成：服务名-主机名-端口号
         hostname = socket.gethostname()
-        instance_uuid = str(uuid.uuid4())[:8]
-        self.service_id = f"{self.service_name}-{hostname}-{instance_uuid}"
+        port = settings.CONSUL_SERVICE_PORT
+        self.service_id = f"{self.service_name}-{hostname}-{port}"
         self.logger.info(f"生成服务实例ID: {self.service_id}")
     
     async def register_service(self) -> bool:
@@ -66,9 +78,11 @@ class ConsulClient:
             
             # 使用TTL健康检查，服务主动报告健康状态
             # 这样就不需要远程Consul访问本地服务了
-            health_check = consul.Check.ttl(
-                ttl="30s"  # TTL时间，服务需要在30秒内报告一次健康状态
-            )
+            # deregister_critical_service_after: 服务健康检查失败后，5分钟自动注销
+            health_check = {
+                "ttl": "30s",  # TTL时间，服务需要在30秒内报告一次健康状态
+                "deregister_critical_service_after": "5m"  # 健康检查持续失败5分钟后自动注销服务
+            }
             
             # 服务元数据
             tags = [
