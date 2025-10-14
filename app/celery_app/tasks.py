@@ -27,6 +27,7 @@ from app.core.exceptions import JobException, TaskException, FileException, SQLF
 from app.config.settings import get_settings
 from app.schemas.common import JobStatusEnum, TaskStatusEnum, SubmissionTypeEnum
 from app.utils.uuid_utils import generate_task_id
+from app.utils.severity_utils import calculate_severity_statistics_from_result
 
 settings = get_settings()
 
@@ -481,11 +482,34 @@ def process_sql_file(self, task_id: str):
             total_violations = analysis_result.get("summary", {}).get("total_violations", 0)
             critical_violations_count = analysis_result.get("summary", {}).get("critical_violations_count", 0)
             
-            # 更新任务状态为SUCCESS
+            # 统计各个severity_level的违规数量
+            try:
+                severity_statistics = calculate_severity_statistics_from_result(analysis_result)
+                service_logger.debug(f"Severity统计完成: {severity_statistics}")
+            except Exception as e:
+                # 统计失败不影响任务成功，使用默认值
+                service_logger.warning(f"统计severity_level失败: {e}，使用默认值")
+                severity_statistics = {
+                    "INFO": 0,
+                    "MINOR": 0,
+                    "MAJOR": 0,
+                    "BLOCKER": 0,
+                    "CRITICAL": 0,
+                    "UNKNOWN": total_violations  # 将所有违规归类为UNKNOWN
+                }
+            
+            # 更新任务状态为SUCCESS，并一次性更新所有统计字段
             task.status = TaskStatusEnum.SUCCESS
             task.result_file_path = result_relative_path
             task.total_violations = total_violations
             task.critical_violations = critical_violations_count
+            # 更新severity_level统计字段
+            task.severity_info = severity_statistics["INFO"]
+            task.severity_minor = severity_statistics["MINOR"]
+            task.severity_major = severity_statistics["MAJOR"]
+            task.severity_blocker = severity_statistics["BLOCKER"]
+            task.severity_critical = severity_statistics["CRITICAL"]
+            task.severity_unknown = severity_statistics["UNKNOWN"]
             db.commit()
             
             service_logger.info(f"Successfully processed SQL file for task {task_id}, violations: {total_violations}, critical_violations: {critical_violations_count}")

@@ -448,16 +448,22 @@ async def calculate_all_severity_statistics(
     task_service: TaskService = Depends(get_task_service)
 ):
     """
-    批量计算所有任务的Severity Level统计信息（临时接口）
+    批量计算所有任务的Severity Level统计信息（历史数据修复接口）
     
+    **用途说明**：
+    - 此接口专门用于修复历史数据中缺失的severity_level统计字段
+    - 对于新创建的任务，severity_level统计会在任务处理时自动计算，无需调用此接口
+    - 建议仅在系统升级后用于一次性修复历史数据
+    
+    **处理逻辑**：
     遍历数据库中的所有任务，读取每个任务的结果JSON文件，
     统计不同severity_level的违规项数量，并更新到数据库字段。
     
-    注意：
+    **注意事项**：
     - 只处理状态为SUCCESS且有结果文件的任务
     - 对于JSON中没有violations或severity_level字段的情况，会将所有字段设为0或归类为UNKNOWN
     - 任何单个任务的失败不会中断整个批量操作
-    - 支持重新计算已有数据
+    - 支持重新计算已有数据（会覆盖现有统计值）
     """
     try:
         api_logger.info("开始批量计算所有任务的Severity Level统计")

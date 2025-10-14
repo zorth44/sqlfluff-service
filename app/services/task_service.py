@@ -24,6 +24,7 @@ from app.core.exceptions import TaskException, JobException, FileException, Erro
 from app.core.logging import service_logger
 from app.utils.uuid_utils import generate_task_id
 from app.utils.file_utils import FileManager
+from app.utils.severity_utils import calculate_severity_statistics
 from app.config.settings import get_settings
 
 settings = get_settings()
@@ -871,7 +872,10 @@ class TaskService:
     
     async def batch_calculate_all_severity_statistics(self) -> TaskSeverityCalculateResponse:
         """
-        批量计算所有任务的Severity Level统计信息并更新到数据库
+        批量计算所有任务的Severity Level统计信息并更新到数据库（历史数据修复接口）
+        
+        此接口用于修复历史数据中缺失的severity_level统计字段。
+        对于新创建的任务，severity_level统计会在任务处理时自动计算，无需调用此接口。
         
         遍历数据库中的所有任务，读取每个任务的结果JSON文件，
         统计不同severity_level的违规项数量，并更新到数据库字段。
@@ -927,31 +931,9 @@ class TaskService:
                         self.logger.warning(f"读取结果文件失败: {task.task_id}, 错误: {e}")
                         continue
                     
-                    # 初始化统计计数器
-                    statistics = {
-                        "INFO": 0,
-                        "MINOR": 0,
-                        "MAJOR": 0,
-                        "BLOCKER": 0,
-                        "CRITICAL": 0,
-                        "UNKNOWN": 0
-                    }
-                    
-                    # 获取violations列表
+                    # 使用工具函数统计severity_level
                     violations = result_content.get('violations', [])
-                    
-                    # 统计每个violation的severity_level
-                    for violation in violations:
-                        severity_level = violation.get('severity_level')
-                        
-                        # 处理不同的severity_level值
-                        if severity_level is None or severity_level == "null":
-                            statistics["UNKNOWN"] += 1
-                        elif severity_level in statistics:
-                            statistics[severity_level] += 1
-                        else:
-                            # 对于未知的severity_level值，归类为UNKNOWN
-                            statistics["UNKNOWN"] += 1
+                    statistics = calculate_severity_statistics(violations)
                     
                     # 更新数据库字段
                     task.severity_info = statistics["INFO"]
