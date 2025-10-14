@@ -546,6 +546,11 @@ class SQLFluffService:
                         # 获取真实的严重等级
                         severity_level = severity_mapping.get(rule_code, None)
                         
+                        # 提取support字段（如果存在）
+                        support = getattr(violation, 'support', None)
+                        if support is None:
+                            support = ""
+                        
                         violation_dict = {
                             "line_no": line_no,
                             "line_pos": line_pos,
@@ -554,12 +559,18 @@ class SQLFluffService:
                             "rule": rule_name,
                             "severity": "critical",  # 语法错误总是严重的
                             "severity_level": severity_level,
-                            "fixable": False
+                            "fixable": False,
+                            "support": support
                         }
                     else:
                         # 标准SQLLintError对象的处理
                         # 获取真实的严重等级
                         severity_level = severity_mapping.get(rule_code, None)
+                        
+                        # 提取support字段（如果存在）
+                        support = getattr(violation, 'support', None)
+                        if support is None:
+                            support = ""
                         
                         violation_dict = {
                             "line_no": getattr(violation, 'line_no', 0),
@@ -569,7 +580,8 @@ class SQLFluffService:
                             "rule": rule_name,
                             "severity": self._get_violation_severity(violation),
                             "severity_level": severity_level,
-                            "fixable": getattr(violation, 'fixable', False)
+                            "fixable": getattr(violation, 'fixable', False),
+                            "support": support
                         }
                     
                     violations.append(violation_dict)
