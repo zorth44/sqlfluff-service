@@ -5,7 +5,7 @@
 包含表结构、关系、索引和约束定义。
 """
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Enum, ForeignKey, Index, JSON, Boolean
+from sqlalchemy import Column, Integer, BigInteger, String, Text, DateTime, Enum, ForeignKey, Index, JSON, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -323,6 +323,13 @@ class LintingTask(Base):
         back_populates="tasks"
     )
     
+    violations = relationship(
+        "LintingViolation",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        lazy="dynamic"
+    )
+    
     def __repr__(self):
         return f"<LintingTask(task_id='{self.task_id}', status='{self.status}')>"
     
@@ -467,4 +474,127 @@ class TaskQueryHelper:
         """获取失败的Task"""
         return session.query(LintingTask).filter(
             LintingTask.status == 'FAILURE'
-        ) 
+        )
+
+
+class LintingViolation(Base):
+    """
+    SQL检查结果明细表模型
+    
+    存储每个SQL文件的具体违规项（violations），
+    用于支持CSV报告生成和统计分析。
+    """
+    __tablename__ = "linting_violations"
+    
+    # 主键
+    id = Column(BigInteger, primary_key=True, autoincrement=True, comment="自增主键")
+    
+    # 关联字段
+    task_id = Column(
+        String(255),
+        ForeignKey('linting_tasks.task_id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+        comment="关联linting_tasks.task_id"
+    )
+    
+    job_id = Column(
+        String(255),
+        nullable=False,
+        index=True,
+        comment="冗余字段，关联linting_jobs.job_id"
+    )
+    
+    # 规则信息
+    rule_code = Column(
+        String(50),
+        nullable=False,
+        comment="规则编号，如RF02、L032"
+    )
+    
+    rule_name = Column(
+        String(200),
+        nullable=True,
+        comment="规则名称"
+    )
+    
+    # 严重程度
+    severity = Column(
+        String(20),
+        nullable=True,
+        comment="SQLFluff原始严重度：critical/warning"
+    )
+    
+    severity_level = Column(
+        String(20),
+        nullable=True,
+        comment="规则分级：INFO/MINOR/MAJOR/BLOCKER/CRITICAL"
+    )
+    
+    # 位置信息
+    line_no = Column(
+        Integer,
+        nullable=True,
+        comment="问题所在行号"
+    )
+    
+    line_pos = Column(
+        Integer,
+        nullable=True,
+        comment="问题所在列号"
+    )
+    
+    # 问题详情
+    description = Column(
+        Text,
+        nullable=True,
+        comment="问题描述"
+    )
+    
+    sql_line = Column(
+        Text,
+        nullable=True,
+        comment="问题所在的SQL代码行"
+    )
+    
+    # 其他属性
+    fixable = Column(
+        Boolean,
+        default=False,
+        comment="是否可自动修复"
+    )
+    
+    # 时间戳
+    created_at = Column(
+        DateTime(6),
+        nullable=False,
+        default=func.now(),
+        comment="创建时间"
+    )
+    
+    # 关系定义
+    task = relationship(
+        "LintingTask",
+        back_populates="violations"
+    )
+    
+    def __repr__(self):
+        return f"<LintingViolation(id={self.id}, task_id='{self.task_id}', rule_code='{self.rule_code}')>"
+    
+    def to_dict(self):
+        """转换为字典格式"""
+        return {
+            'id': self.id,
+            'task_id': self.task_id,
+            'job_id': self.job_id,
+            'rule_code': self.rule_code,
+            'rule_name': self.rule_name,
+            'severity': self.severity,
+            'severity_level': self.severity_level,
+            'line_no': self.line_no,
+            'line_pos': self.line_pos,
+            'description': self.description,
+            'sql_line': self.sql_line,
+            'fixable': self.fixable,
+            'created_at': self.created_at
+        } 

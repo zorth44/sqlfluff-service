@@ -17,8 +17,10 @@ from app.schemas.job import (
     JobCreateRequest, JobCreateWithUploadRequest, JobCreateFromExtractedRequest, JobCreateResponse, JobDetailResponse,
     JobListResponse, JobSummary, JobStatistics, JobTaskIdsResponse
 )
+from app.schemas.violation import JobViolationsResponse, JobStatisticsResponse
 from app.schemas.common import JobStatusEnum, SubmissionTypeEnum
 from app.core.logging import api_logger
+from app.core.database import get_db
 
 router = APIRouter()
 
@@ -440,6 +442,325 @@ async def get_job_task_ids(
     except Exception as e:
         api_logger.error(f"查询Job任务ID列表失败: {job_id}, 错误: {e}")
         raise handle_service_exception(e, "查询任务ID列表")
+
+
+# ============= Violations 相关接口 =============
+
+@router.get("/jobs/{job_id}/violations", response_model=JobViolationsResponse)
+async def get_job_violations(
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    获取Job下所有违规项（用于CSV生成和详细查询）
+    
+    返回Job下所有Task及其violations明细，按文件路径和行号排序。
+    适用于生成详细报告和数据分析。
+    """
+    try:
+        from app.models.database import LintingJob, LintingTask, LintingViolation
+        from app.schemas.violation import TaskWithViolations, ViolationSimple
+        import os
+        
+        # 验证job_id格式
+        job_id = validate_job_id(job_id)
+        api_logger.info(f"查询Job violations: {job_id}")
+        
+        # 验证Job是否存在
+        job = db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"核验工作不存在: {job_id}"
+            )
+        
+        # 查询Job下的所有Task和Violations（一次JOIN查询）
+        query = db.query(
+            LintingTask,
+            LintingViolation
+        ).outerjoin(
+            LintingViolation,
+            LintingTask.task_id == LintingViolation.task_id
+        ).filter(
+            LintingTask.job_id == job_id
+        ).order_by(
+            LintingTask.source_file_path,
+            LintingViolation.line_no
+        )
+        
+        results = query.all()
+        
+        # 按Task分组处理数据
+        tasks_dict = {}
+        total_violations_count = 0
+        
+        for task, violation in results:
+            if task.task_id not in tasks_dict:
+                tasks_dict[task.task_id] = {
+                    'task_id': task.task_id,
+                    'source_file_path': task.source_file_path,
+                    'file_name': os.path.basename(task.source_file_path) if task.source_file_path else '',
+                    'sql_lines': task.sql_lines,
+                    'total_violations': task.total_violations or 0,
+                    'violations': []
+                }
+            
+            # 添加violation（如果存在）
+            if violation:
+                tasks_dict[task.task_id]['violations'].append(
+                    ViolationSimple(
+                        rule_code=violation.rule_code,
+                        rule_name=violation.rule_name,
+                        severity_level=violation.severity_level,
+                        line_no=violation.line_no,
+                        line_pos=violation.line_pos,
+                        description=violation.description,
+                        sql_line=violation.sql_line,
+                        fixable=violation.fixable or False
+                    )
+                )
+                total_violations_count += 1
+        
+        # 转换为列表
+        tasks_list = [TaskWithViolations(**task_data) for task_data in tasks_dict.values()]
+        
+        response = JobViolationsResponse(
+            job_id=job_id,
+            total_tasks=len(tasks_list),
+            total_violations=total_violations_count,
+            tasks=tasks_list
+        )
+        
+        api_logger.info(f"Job violations查询成功: {job_id}, tasks: {len(tasks_list)}, violations: {total_violations_count}")
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"查询Job violations失败: {job_id}, 错误: {e}")
+        raise handle_service_exception(e, "查询违规项")
+
+
+@router.get("/jobs/{job_id}/statistics", response_model=JobStatisticsResponse)
+async def get_job_statistics(
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    获取Job的统计信息（规则热度、严重级别分布）
+    
+    返回Job下的聚合统计数据，包括：
+    - 严重级别分布
+    - 规则触发次数 TOP 20
+    """
+    try:
+        from app.models.database import LintingJob, LintingTask, LintingViolation
+        from app.schemas.violation import RuleStatistics, SeverityStatistics
+        from sqlalchemy import func, distinct
+        
+        # 验证job_id格式
+        job_id = validate_job_id(job_id)
+        api_logger.info(f"查询Job statistics: {job_id}")
+        
+        # 验证Job是否存在
+        job = db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"核验工作不存在: {job_id}"
+            )
+        
+        # 统计总文件数和有违规项的文件数
+        total_files = db.query(func.count(LintingTask.task_id)).filter(
+            LintingTask.job_id == job_id
+        ).scalar()
+        
+        files_with_violations = db.query(func.count(distinct(LintingViolation.task_id))).filter(
+            LintingViolation.job_id == job_id
+        ).scalar()
+        
+        # 统计总违规项数
+        total_violations = db.query(func.count(LintingViolation.id)).filter(
+            LintingViolation.job_id == job_id
+        ).scalar()
+        
+        # 统计严重级别分布
+        severity_query = db.query(
+            LintingViolation.severity_level,
+            func.count(LintingViolation.id).label('count')
+        ).filter(
+            LintingViolation.job_id == job_id
+        ).group_by(
+            LintingViolation.severity_level
+        ).all()
+        
+        severity_distribution = []
+        for sev_level, count in severity_query:
+            percentage = (count / total_violations * 100) if total_violations > 0 else 0
+            severity_distribution.append(
+                SeverityStatistics(
+                    severity_level=sev_level or 'UNKNOWN',
+                    count=count,
+                    percentage=round(percentage, 2)
+                )
+            )
+        
+        # 统计规则热度 TOP 20
+        rule_query = db.query(
+            LintingViolation.rule_code,
+            LintingViolation.rule_name,
+            LintingViolation.severity_level,
+            func.count(LintingViolation.id).label('count'),
+            func.count(distinct(LintingViolation.task_id)).label('affected_files')
+        ).filter(
+            LintingViolation.job_id == job_id
+        ).group_by(
+            LintingViolation.rule_code,
+            LintingViolation.rule_name,
+            LintingViolation.severity_level
+        ).order_by(
+            func.count(LintingViolation.id).desc()
+        ).limit(20).all()
+        
+        top_rules = []
+        for rule_code, rule_name, severity_level, count, affected_files in rule_query:
+            top_rules.append(
+                RuleStatistics(
+                    rule_code=rule_code,
+                    rule_name=rule_name,
+                    severity_level=severity_level,
+                    count=count,
+                    affected_files=affected_files
+                )
+            )
+        
+        response = JobStatisticsResponse(
+            job_id=job_id,
+            total_violations=total_violations or 0,
+            total_files=total_files or 0,
+            files_with_violations=files_with_violations or 0,
+            severity_distribution=severity_distribution,
+            top_rules=top_rules
+        )
+        
+        api_logger.info(f"Job statistics查询成功: {job_id}")
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"查询Job statistics失败: {job_id}, 错误: {e}")
+        raise handle_service_exception(e, "查询统计信息")
+
+
+@router.get("/jobs/{job_id}/export/csv")
+async def export_job_csv(
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    导出Job的CSV报告
+    
+    直接返回CSV文件供下载，包含所有Task的violations明细。
+    """
+    try:
+        from fastapi.responses import StreamingResponse
+        from app.models.database import LintingJob, LintingTask, LintingViolation
+        import io
+        import csv
+        import os
+        
+        # 验证job_id格式
+        job_id = validate_job_id(job_id)
+        api_logger.info(f"导出Job CSV: {job_id}")
+        
+        # 验证Job是否存在
+        job = db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"核验工作不存在: {job_id}"
+            )
+        
+        # 查询Job下的所有Task和Violations
+        query = db.query(
+            LintingTask,
+            LintingViolation
+        ).outerjoin(
+            LintingViolation,
+            LintingTask.task_id == LintingViolation.task_id
+        ).filter(
+            LintingTask.job_id == job_id
+        ).order_by(
+            LintingTask.source_file_path,
+            LintingViolation.line_no
+        )
+        
+        results = query.all()
+        
+        # 创建CSV内容
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # 写入CSV表头
+        writer.writerow([
+            '文件路径',
+            '文件名',
+            '代码行数',
+            '行号',
+            '列号',
+            '规则编号',
+            '规则名称',
+            '严重级别',
+            '问题描述',
+            '是否可修复',
+            'SQL代码行'
+        ])
+        
+        # 写入数据行
+        for task, violation in results:
+            if violation:
+                # 有violation的行
+                writer.writerow([
+                    task.source_file_path or '',
+                    os.path.basename(task.source_file_path) if task.source_file_path else '',
+                    task.sql_lines or '',
+                    violation.line_no or '',
+                    violation.line_pos or '',
+                    violation.rule_code or '',
+                    violation.rule_name or '',
+                    violation.severity_level or '',
+                    violation.description or '',
+                    '是' if violation.fixable else '否',
+                    violation.sql_line or ''
+                ])
+            else:
+                # 没有violation的Task（仍然显示文件信息）
+                writer.writerow([
+                    task.source_file_path or '',
+                    os.path.basename(task.source_file_path) if task.source_file_path else '',
+                    task.sql_lines or '',
+                    '', '', '', '', '', '无违规项', '', ''
+                ])
+        
+        # 重置流位置
+        output.seek(0)
+        
+        # 返回CSV文件
+        api_logger.info(f"CSV导出成功: {job_id}")
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename=job_{job_id}_report.csv"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"导出CSV失败: {job_id}, 错误: {e}")
+        raise handle_service_exception(e, "导出CSV报告")
 
 
 # ============= 内部管理接口（可选实现） =============

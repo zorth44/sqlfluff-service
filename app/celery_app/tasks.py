@@ -18,7 +18,7 @@ from typing import List, Dict, Any
 
 from app.celery_app.celery_main import celery_app
 from app.core.database import SessionLocal
-from app.models.database import LintingJob, LintingTask
+from app.models.database import LintingJob, LintingTask, LintingViolation
 from app.services.sqlfluff_service import SQLFluffService
 from app.services.rule_severity_mapper import RuleSeverityMapper
 from app.utils.file_utils import FileManager
@@ -481,6 +481,52 @@ def process_sql_file(self, task_id: str):
             # 提取违规项总数和严重违规项数
             total_violations = analysis_result.get("summary", {}).get("total_violations", 0)
             critical_violations_count = analysis_result.get("summary", {}).get("critical_violations_count", 0)
+            
+            # === Phase 2: 批量写入violations表 ===
+            violations = analysis_result.get("violations", [])
+            if violations:
+                try:
+                    service_logger.info(f"开始批量写入 {len(violations)} 条violations到数据库")
+                    
+                    # 读取源文件内容，用于填充sql_line字段
+                    sql_lines_dict = {}  # {line_no: sql_line}
+                    try:
+                        with open(sql_file_path, 'r', encoding='utf-8') as f:
+                            sql_content_lines = f.readlines()
+                            for idx, line in enumerate(sql_content_lines, start=1):
+                                sql_lines_dict[idx] = line.rstrip('\r\n')
+                    except Exception as read_err:
+                        service_logger.warning(f"读取源文件失败，sql_line将为空: {read_err}")
+                    
+                    violation_records = []
+                    for v in violations:
+                        line_no = v.get('line_no')
+                        # 从源文件中获取对应行的SQL代码
+                        sql_line = sql_lines_dict.get(line_no, '') if line_no else ''
+                        
+                        violation_records.append({
+                            'task_id': task_id,
+                            'job_id': job.job_id,  # 冗余字段，优化查询
+                            'rule_code': v.get('code', ''),
+                            'rule_name': v.get('rule'),
+                            'severity': v.get('severity'),
+                            'severity_level': v.get('severity_level'),
+                            'line_no': line_no,
+                            'line_pos': v.get('line_pos'),
+                            'description': v.get('description'),
+                            'sql_line': sql_line,  # 从源文件读取的SQL行内容
+                            'fixable': v.get('fixable', False),
+                        })
+                    
+                    # 批量插入（性能优化）
+                    db.bulk_insert_mappings(LintingViolation, violation_records)
+                    service_logger.info(f"成功批量写入 {len(violation_records)} 条violations")
+                except Exception as vio_err:
+                    # violations写入失败不应影响Task状态更新
+                    service_logger.error(f"Violations写入失败（不影响任务状态）: {vio_err}")
+                    # 不抛出异常，继续执行
+            else:
+                service_logger.info(f"Task {task_id} 没有violations，跳过写入")
             
             # 统计各个severity_level的违规数量
             try:
