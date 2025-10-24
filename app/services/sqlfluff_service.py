@@ -366,6 +366,8 @@ class SQLFluffService:
             try:
                 with open(abs_path, 'r', encoding=encoding) as f:
                     content = f.read()
+                    if encoding == "utf-8" and content and content.startswith('\ufeff'):
+                        content = content[1:]
                     self.logger.debug(f"成功使用 {encoding} 编码读取文件: {relative_path}")
                     return content
             except UnicodeDecodeError:

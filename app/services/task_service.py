@@ -388,7 +388,7 @@ class TaskService:
     
     async def get_task_lint_result(self, task_id: str) -> Optional[TaskLintResultResponse]:
         """
-        获取Task的Lint结果，包含SQL行内容
+        获取Task的Lint结果，包含SQL行内容（从数据库读取）
         
         Args:
             task_id: Task ID
@@ -397,94 +397,41 @@ class TaskService:
             Optional[TaskLintResultResponse]: 带SQL行内容的违规项列表
         """
         try:
+            # 验证任务是否存在
             task = await self.get_task_by_id(task_id)
-            if not task or not task.result_file_path:
+            if not task:
                 return None
             
-            # 读取结果文件
-            if not self.file_manager.file_exists(task.result_file_path):
-                self.logger.warning(f"结果文件不存在: {task.result_file_path}")
-                return None
-            
-            result_data = self.file_manager.read_json_file(task.result_file_path)
-            violations = result_data.get('violations', [])
+            # 从数据库中查询violations
+            from app.models.database import LintingViolation
+            violations_records = self.db.query(LintingViolation).filter(
+                LintingViolation.task_id == task_id
+            ).order_by(LintingViolation.line_no, LintingViolation.line_pos).all()
             
             # 如果没有违规项，直接返回空列表
-            if not violations:
+            if not violations_records:
+                self.logger.debug(f"Task {task_id} 没有violations")
                 return TaskLintResultResponse(violations=[])
             
-            # 读取源文件内容
-            if not self.file_manager.file_exists(task.source_file_path):
-                self.logger.warning(f"源文件不存在: {task.source_file_path}")
-                # 返回原始violations，不包含sql_line
-                violations_with_sql = []
-                for violation in violations:
-                    violation_with_sql = TaskViolationWithSQL(
-                        line_no=violation.get('line_no', 0),
-                        line_pos=violation.get('line_pos', 0),
-                        code=violation.get('code', ''),
-                        description=violation.get('description', ''),
-                        rule=violation.get('rule', ''),
-                        severity=violation.get('severity', ''),
-                        severity_level=violation.get('severity_level'),
-                        fixable=violation.get('fixable', False),
-                        sql_line="",
-                        support=violation.get('support', "")
-                    )
-                    violations_with_sql.append(violation_with_sql)
-                return TaskLintResultResponse(violations=violations_with_sql)
+            # 将数据库记录转换为响应模型
+            violations_with_sql = []
+            for violation_record in violations_records:
+                violation_with_sql = TaskViolationWithSQL(
+                    line_no=violation_record.line_no or 0,
+                    line_pos=violation_record.line_pos or 0,
+                    code=violation_record.rule_code or '',
+                    description=violation_record.description or '',
+                    rule=violation_record.rule_name or '',
+                    severity=violation_record.severity or '',
+                    severity_level=violation_record.severity_level,
+                    fixable=violation_record.fixable or False,
+                    sql_line=violation_record.sql_line or '',  # 直接从数据库读取
+                    support=""  # 数据库中没有这个字段，设置为空字符串
+                )
+                violations_with_sql.append(violation_with_sql)
             
-            try:
-                sql_content = self.file_manager.read_text_file(task.source_file_path)
-                sql_lines = sql_content.split('\n')
-                
-                # 为每个违规项添加对应的SQL行内容
-                violations_with_sql = []
-                for violation in violations:
-                    line_no = violation.get('line_no', 0)
-                    # 确保行号在有效范围内（SQL行号从1开始，数组索引从0开始）
-                    if 1 <= line_no <= len(sql_lines):
-                        sql_line = sql_lines[line_no - 1].rstrip('\r\n')
-                    else:
-                        sql_line = ""  # 如果行号超出范围，设置为空字符串
-                    
-                    # 创建TaskViolationWithSQL对象
-                    violation_with_sql = TaskViolationWithSQL(
-                        line_no=violation.get('line_no', 0),
-                        line_pos=violation.get('line_pos', 0),
-                        code=violation.get('code', ''),
-                        description=violation.get('description', ''),
-                        rule=violation.get('rule', ''),
-                        severity=violation.get('severity', ''),
-                        severity_level=violation.get('severity_level'),
-                        fixable=violation.get('fixable', False),
-                        sql_line=sql_line,
-                        support=violation.get('support', "")
-                    )
-                    violations_with_sql.append(violation_with_sql)
-                
-                self.logger.debug(f"获取Task Lint结果成功: {task_id}, 违规项数量: {len(violations_with_sql)}")
-                return TaskLintResultResponse(violations=violations_with_sql)
-                
-            except Exception as e:
-                self.logger.error(f"读取源文件失败: {task.source_file_path}, 错误: {e}")
-                # 如果读取源文件失败，返回原始violations，sql_line为空
-                violations_with_sql = []
-                for violation in violations:
-                    violation_with_sql = TaskViolationWithSQL(
-                        line_no=violation.get('line_no', 0),
-                        line_pos=violation.get('line_pos', 0),
-                        code=violation.get('code', ''),
-                        description=violation.get('description', ''),
-                        rule=violation.get('rule', ''),
-                        severity=violation.get('severity', ''),
-                        severity_level=violation.get('severity_level'),
-                        fixable=violation.get('fixable', False),
-                        sql_line="",
-                        support=violation.get('support', "")
-                    )
-                    violations_with_sql.append(violation_with_sql)
-                return TaskLintResultResponse(violations=violations_with_sql)
+            self.logger.debug(f"获取Task Lint结果成功: {task_id}, 违规项数量: {len(violations_with_sql)}")
+            return TaskLintResultResponse(violations=violations_with_sql)
             
         except Exception as e:
             self.logger.error(f"获取Task Lint结果失败: {task_id}, 错误: {e}")

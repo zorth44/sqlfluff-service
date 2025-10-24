@@ -442,12 +442,31 @@ def process_sql_file(self, task_id: str):
                     "message": error_msg
                 }
             
-            # 计算SQL文件行数
+            # 计算SQL文件行数（支持多种编码）
             try:
-                with open(sql_file_path, 'r', encoding='utf-8') as f:
-                    line_count = sum(1 for line in f)
-                task.sql_lines = line_count
-                service_logger.info(f"SQL file {task.source_file_path} has {line_count} lines")
+                line_count = None
+                # 尝试多种编码格式
+                encodings = ['utf-8', 'utf-8-sig', 'gbk', 'gb2312', 'latin-1', 'cp1252']
+                for encoding in encodings:
+                    try:
+                        with open(sql_file_path, 'r', encoding=encoding) as f:
+                            line_count = sum(1 for line in f)
+                        service_logger.info(f"SQL file {task.source_file_path} has {line_count} lines (encoding: {encoding})")
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                
+                if line_count is not None:
+                    task.sql_lines = line_count
+                else:
+                    # 如果所有编码都失败，尝试使用errors='replace'
+                    try:
+                        with open(sql_file_path, 'r', encoding='utf-8', errors='replace') as f:
+                            line_count = sum(1 for line in f)
+                        task.sql_lines = line_count
+                        service_logger.warning(f"SQL file {task.source_file_path} 使用UTF-8替换模式读取，{line_count} 行")
+                    except Exception:
+                        task.sql_lines = None
             except Exception as e:
                 service_logger.warning(f"Failed to count lines in SQL file {task.source_file_path}: {e}")
                 task.sql_lines = None
@@ -488,13 +507,35 @@ def process_sql_file(self, task_id: str):
                 try:
                     service_logger.info(f"开始批量写入 {len(violations)} 条violations到数据库")
                     
-                    # 读取源文件内容，用于填充sql_line字段
+                    # 读取源文件内容，用于填充sql_line字段（支持多种编码）
                     sql_lines_dict = {}  # {line_no: sql_line}
                     try:
-                        with open(sql_file_path, 'r', encoding='utf-8') as f:
-                            sql_content_lines = f.readlines()
-                            for idx, line in enumerate(sql_content_lines, start=1):
-                                sql_lines_dict[idx] = line.rstrip('\r\n')
+                        # 尝试多种编码格式
+                        encodings = ['utf-8', 'utf-8-sig', 'gbk', 'gb2312', 'latin-1', 'cp1252']
+                        file_read_success = False
+                        
+                        for encoding in encodings:
+                            try:
+                                with open(sql_file_path, 'r', encoding=encoding) as f:
+                                    sql_content_lines = f.readlines()
+                                    for idx, line in enumerate(sql_content_lines, start=1):
+                                        sql_lines_dict[idx] = line.rstrip('\r\n')
+                                service_logger.debug(f"成功使用 {encoding} 编码读取源文件用于sql_line")
+                                file_read_success = True
+                                break
+                            except UnicodeDecodeError:
+                                continue
+                        
+                        # 如果所有编码都失败，尝试使用errors='replace'
+                        if not file_read_success:
+                            try:
+                                with open(sql_file_path, 'r', encoding='utf-8', errors='replace') as f:
+                                    sql_content_lines = f.readlines()
+                                    for idx, line in enumerate(sql_content_lines, start=1):
+                                        sql_lines_dict[idx] = line.rstrip('\r\n')
+                                service_logger.warning(f"使用UTF-8替换模式读取源文件用于sql_line")
+                            except Exception:
+                                pass
                     except Exception as read_err:
                         service_logger.warning(f"读取源文件失败，sql_line将为空: {read_err}")
                     
