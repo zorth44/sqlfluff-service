@@ -660,7 +660,7 @@ async def export_job_csv(
 ):
     """
     导出Job的CSV报告
-    
+
     直接返回CSV文件供下载，包含所有Task的violations明细。
     """
     try:
@@ -669,11 +669,11 @@ async def export_job_csv(
         import io
         import csv
         import os
-        
+
         # 验证job_id格式
         job_id = validate_job_id(job_id)
         api_logger.info(f"导出Job CSV: {job_id}")
-        
+
         # 验证Job是否存在
         job = db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
         if not job:
@@ -681,7 +681,7 @@ async def export_job_csv(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"核验工作不存在: {job_id}"
             )
-        
+
         # 查询Job下的所有Task和Violations
         query = db.query(
             LintingTask,
@@ -695,13 +695,13 @@ async def export_job_csv(
             LintingTask.source_file_path,
             LintingViolation.line_no
         )
-        
+
         results = query.all()
-        
+
         # 创建CSV内容
         output = io.StringIO()
         writer = csv.writer(output)
-        
+
         # 写入CSV表头
         writer.writerow([
             '文件路径',
@@ -716,7 +716,7 @@ async def export_job_csv(
             '是否可修复',
             'SQL代码行'
         ])
-        
+
         # 写入数据行
         for task, violation in results:
             if violation:
@@ -742,10 +742,10 @@ async def export_job_csv(
                     task.sql_lines or '',
                     '', '', '', '', '', '无违规项', '', ''
                 ])
-        
+
         # 重置流位置
         output.seek(0)
-        
+
         # 返回CSV文件
         api_logger.info(f"CSV导出成功: {job_id}")
         return StreamingResponse(
@@ -755,12 +755,102 @@ async def export_job_csv(
                 "Content-Disposition": f"attachment; filename=job_{job_id}_report.csv"
             }
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         api_logger.error(f"导出CSV失败: {job_id}, 错误: {e}")
         raise handle_service_exception(e, "导出CSV报告")
+
+
+@router.get("/jobs/{job_id}/export/html")
+async def export_job_html(
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    导出Job的HTML报告（Fragment版本）
+
+    返回HTML片段用于Vue3前端集成。
+    如果文件数量超过限制，返回JSON错误响应。
+    """
+    try:
+        from fastapi.responses import HTMLResponse, JSONResponse
+        from app.services.html_report_service import html_report_service
+
+        # 验证job_id格式
+        job_id = validate_job_id(job_id)
+        api_logger.info(f"导出Job HTML报告: {job_id}")
+
+        # 生成HTML报告
+        html_content, error = await html_report_service.generate_html_report(
+            job_id=job_id,
+            db=db,
+            standalone=False
+        )
+
+        # 如果有错误，返回JSON错误响应
+        if error:
+            api_logger.warning(f"HTML报告生成失败: {job_id}, {error}")
+            return JSONResponse(
+                content=eval(error),  # error is a JSON string
+                status_code=status.HTTP_200_OK
+            )
+
+        # 返回HTML内容
+        api_logger.info(f"HTML报告导出成功: {job_id}")
+        return HTMLResponse(content=html_content)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"导出HTML失败: {job_id}, 错误: {e}")
+        raise handle_service_exception(e, "导出HTML报告")
+
+
+@router.get("/jobs/{job_id}/export/html/standalone")
+async def export_job_html_standalone(
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    导出Job的HTML报告（Standalone版本）
+
+    返回完整的HTML文档，可在浏览器中直接打开。
+    用于开发调试和独立查看。
+    """
+    try:
+        from fastapi.responses import HTMLResponse, JSONResponse
+        from app.services.html_report_service import html_report_service
+
+        # 验证job_id格式
+        job_id = validate_job_id(job_id)
+        api_logger.info(f"导出Job HTML报告（Standalone）: {job_id}")
+
+        # 生成HTML报告
+        html_content, error = await html_report_service.generate_html_report(
+            job_id=job_id,
+            db=db,
+            standalone=True
+        )
+
+        # 如果有错误，返回JSON错误响应
+        if error:
+            api_logger.warning(f"HTML报告生成失败（Standalone）: {job_id}, {error}")
+            return JSONResponse(
+                content=eval(error),  # error is a JSON string
+                status_code=status.HTTP_200_OK
+            )
+
+        # 返回HTML内容
+        api_logger.info(f"HTML报告导出成功（Standalone）: {job_id}")
+        return HTMLResponse(content=html_content)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"导出HTML失败（Standalone）: {job_id}, 错误: {e}")
+        raise handle_service_exception(e, "导出HTML报告")
 
 
 # ============= 内部管理接口（可选实现） =============

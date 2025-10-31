@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL核验报告 - {{ job_id }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+        }
+
+        /* Severity color variables */
+        :root {
+            --severity-color-critical: #c53030;
+            --severity-color-blocker: #dd6b20;
+            --severity-color-major: #d69e2e;
+            --severity-color-minor: #3182ce;
+            --severity-color-info: #718096;
+        }
+
+        /* Severity badge colors */
+        .severity-critical { background: var(--severity-color-critical) !important; }
+        .severity-blocker { background: var(--severity-color-blocker) !important; }
+        .severity-major { background: var(--severity-color-major) !important; }
+        .severity-minor { background: var(--severity-color-minor) !important; }
+        .severity-info { background: var(--severity-color-info) !important; }
+
+        /* Violation line highlighting */
+        .violation-line {
+            border-left: 4px solid;
+            padding-left: 12px !important;
+            transition: all 0.3s ease;
+        }
+        .violation-line.critical {
+            background: rgba(197, 48, 48, 0.15) !important;
+            border-left-color: var(--severity-color-critical);
+        }
+        .violation-line.blocker {
+            background: rgba(221, 107, 32, 0.15) !important;
+            border-left-color: var(--severity-color-blocker);
+        }
+        .violation-line.major {
+            background: rgba(214, 158, 46, 0.15) !important;
+            border-left-color: var(--severity-color-major);
+        }
+        .violation-line.minor {
+            background: rgba(49, 130, 206, 0.15) !important;
+            border-left-color: var(--severity-color-minor);
+        }
+        .violation-line.info {
+            background: rgba(113, 128, 150, 0.15) !important;
+            border-left-color: var(--severity-color-info);
+        }
+
+        /* Active state in navigation */
+        .violation-item.active {
+            background: #ebf4ff !important;
+            border-left: 3px solid #3182ce;
+        }
+
+        /* Code line styling */
+        .code-line {
+            display: block;
+            padding: 2px 0;
+            white-space: pre;
+        }
+
+        /* File section collapsed */
+        .file-item.collapsed .violations-list {
+            display: none !important;
+        }
+        .file-item.collapsed .toggle-icon {
+            transform: rotate(-90deg);
+        }
+
+        /* Print styles */
+        @media print {
+            .sidebar { display: none !important; }
+            .content-panel { width: 100% !important; max-width: none !important; }
+            .tooltip { position: static !important; display: block !important; }
+            .no-print { display: none !important; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        {# Include the fragment template content #}
+        {% include 'html_report_fragment.jinja2' %}
+    </div>
+
+    <div class="text-center text-gray-500 text-sm py-4 no-print">
+        <p>SQL核验服务 - 生成于 {{ created_at }}</p>
+    </div>
+</body>
+</html>

@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     # ============= 规则分级配置 =============
     RULE_SEVERITY_ENABLED: bool = Field(default=True, description="是否启用规则分级映射功能", env="RULE_SEVERITY_ENABLED")
     RULE_SEVERITY_CACHE_TTL_SECONDS: int = Field(default=600, description="规则分级映射缓存TTL时间（秒）", env="RULE_SEVERITY_CACHE_TTL_SECONDS")
+
+    # ============= HTML报告导出配置 =============
+    EXPORT_HTML_FILE_LIMIT: int = Field(default=100, description="HTML报告导出最大文件数限制", env="EXPORT_HTML_FILE_LIMIT")
+    EXPORT_HTML_CONTEXT_LINES: int = Field(default=3, description="违规项上下文显示行数", env="EXPORT_HTML_CONTEXT_LINES")
     
     @validator('ENVIRONMENT')
     def validate_environment(cls, v):

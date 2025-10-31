@@ -1,0 +1,342 @@
+{# HTML Fragment Template for SQL Linting Report - Optimized Version #}
+{# Phase 1 Optimization: Shared tooltip, data attributes, minified JSON #}
+
+<div class="sql-report" id="sql-report-{{ job_id }}" data-job-id="{{ job_id }}">
+    {# Header #}
+    <header class="report-header" style="padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 8px 8px 0 0;">
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600;">SQL核验报告</h1>
+        <div style="margin-top: 8px; opacity: 0.9; font-size: 14px;">
+            工作ID: {{ job_id }} | 生成时间: {{ created_at }}
+        </div>
+    </header>
+
+    {# Main Layout: Sidebar + Content #}
+    <div class="report-layout" style="display: flex; min-height: 600px; background: #f7fafc; border-radius: 0 0 8px 8px;">
+
+        {# Left Sidebar #}
+        <aside class="sidebar" style="width: 320px; background: white; border-right: 1px solid #e2e8f0; overflow-y: auto; max-height: 800px;">
+            {# Severity Filter #}
+            <div class="filter-section" style="padding: 20px; border-bottom: 1px solid #e2e8f0; background: #f7fafc;">
+                <h3 style="margin: 0 0 12px 0; font-size: 16px; font-weight: 600; color: #2d3748;">过滤器</h3>
+                <div class="filter-checkboxes" style="display: flex; flex-direction: column; gap: 8px;">
+                    {% for filter in severity_filters %}
+                    <label style="display: flex; align-items: center; cursor: pointer; font-size: 14px; color: #4a5568;">
+                        <input type="checkbox"
+                               value="{{ filter.value }}"
+                               {% if filter.checked %}checked{% endif %}
+                               onchange="filterBySeverity()"
+                               style="margin-right: 8px; cursor: pointer;">
+                        <span class="severity-label severity-{{ filter.value|lower }}" style="padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500;">
+                            {{ filter.label }}
+                        </span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            {# File Tree Navigation #}
+            <nav class="file-tree" style="padding: 16px;">
+                {% for file in files %}
+                <div class="file-item" data-task-id="{{ file.task_id }}" style="margin-bottom: 12px;">
+                    {# File Header #}
+                    <div class="file-header"
+                         onclick="toggleFileSection(this)"
+                         style="display: flex; align-items: center; padding: 8px; background: #edf2f7; border-radius: 6px; cursor: pointer; user-select: none; transition: background 0.2s;"
+                         onmouseover="this.style.background='#e2e8f0'"
+                         onmouseout="this.style.background='#edf2f7'">
+                        <span class="toggle-icon" style="margin-right: 8px; font-size: 12px; transition: transform 0.2s;">▼</span>
+                        <span class="file-icon" style="margin-right: 8px;">📁</span>
+                        <span class="file-name" style="flex: 1; font-size: 13px; font-weight: 500; color: #2d3748; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ file.source_file_path }}">
+                            {{ file.file_name }}
+                        </span>
+                        <span class="violation-count" style="font-size: 12px; color: #718096; background: white; padding: 2px 6px; border-radius: 10px;">
+                            ({{ file.total_violations }})
+                        </span>
+                    </div>
+
+                    {# Violations List #}
+                    <ul class="violations-list" style="list-style: none; margin: 8px 0 0 0; padding: 0 0 0 24px; display: block;">
+                        {% for violation in file.violations %}
+                        <li class="violation-item"
+                            data-task-id="{{ file.task_id }}"
+                            data-line="{{ violation.line_no }}"
+                            data-severity="{{ violation.severity_level }}"
+                            onclick="showViolation(this)"
+                            style="padding: 6px 8px; margin-bottom: 4px; border-radius: 4px; cursor: pointer; transition: background 0.2s; font-size: 13px; position: relative;"
+                            onmouseover="this.style.background='#f7fafc'"
+                            onmouseout="if(!this.classList.contains('active')){this.style.background='transparent'}">
+                            <span class="line-number" style="color: #a0aec0; margin-right: 4px;">{{ violation.line_no }}:</span>
+                            <span class="rule-code severity-{{ violation.severity_level|lower }}"
+                                  data-severity="{{ violation.severity_level }}"
+                                  data-rule="{{ violation.rule_code }}"
+                                  data-rule-name="{{ violation.rule_name }}"
+                                  data-desc="{{ violation.description|e }}"
+                                  data-line="{{ violation.line_no }}"
+                                  data-col="{{ violation.column_no }}"
+                                  onmouseenter="showTooltip(event, this)"
+                                  onmouseleave="hideTooltip()"
+                                  style="padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; color: white; cursor: help;">
+                                {{ violation.rule_code }}
+                            </span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endfor %}
+            </nav>
+        </aside>
+
+        {# Right Panel #}
+        <main class="content-panel" style="flex: 1; padding: 24px; overflow-y: auto; max-height: 800px;">
+            {# Initial State: Summary View #}
+            <div id="summary-view" class="summary-view" style="display: block;">
+                <h2 style="margin: 0 0 24px 0; font-size: 24px; font-weight: 600; color: #2d3748;">📊 SQL核验报告汇总</h2>
+
+                <div class="stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 32px;">
+                    <div class="stat-card" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                        <div class="stat-label" style="font-size: 14px; color: #718096; margin-bottom: 8px;">总文件数</div>
+                        <div class="stat-value" style="font-size: 32px; font-weight: 700; color: #2d3748;">{{ summary.total_files }}</div>
+                    </div>
+                    <div class="stat-card" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                        <div class="stat-label" style="font-size: 14px; color: #718096; margin-bottom: 8px;">总违规项</div>
+                        <div class="stat-value" style="font-size: 32px; font-weight: 700; color: #e53e3e;">{{ summary.total_violations }}</div>
+                    </div>
+                    <div class="stat-card" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                        <div class="stat-label" style="font-size: 14px; color: #718096; margin-bottom: 8px;">存在问题的文件</div>
+                        <div class="stat-value" style="font-size: 32px; font-weight: 700; color: #dd6b20;">{{ summary.files_with_violations }}</div>
+                    </div>
+                </div>
+
+                {# Severity Distribution #}
+                <div class="severity-distribution" style="background: white; padding: 24px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                    <h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #2d3748;">严重级别分布</h3>
+                    <div class="severity-bars" style="display: flex; flex-direction: column; gap: 12px;">
+                        {% for sev in summary.severity_distribution %}
+                        <div class="severity-bar" style="display: flex; align-items: center; gap: 12px;">
+                            <span class="severity-label severity-{{ sev.severity_level|lower }}" style="min-width: 100px; padding: 6px 12px; border-radius: 4px; font-size: 13px; font-weight: 600; text-align: center; color: white;">
+                                {{ sev.severity_level }}
+                            </span>
+                            <div style="flex: 1; background: #e2e8f0; height: 24px; border-radius: 12px; overflow: hidden; position: relative;">
+                                <div style="background: var(--severity-color-{{ sev.severity_level|lower }}); height: 100%; width: {{ (sev.count / summary.total_violations * 100)|round|int }}%; transition: width 0.3s;"></div>
+                            </div>
+                            <span class="severity-count" style="min-width: 60px; text-align: right; font-weight: 600; color: #4a5568; font-size: 16px;">
+                                {{ sev.count }}
+                            </span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <p class="hint" style="margin-top: 32px; text-align: center; color: #a0aec0; font-size: 14px;">
+                    ← 点击左侧违规项查看详细SQL代码
+                </p>
+            </div>
+
+            {# SQL File View (hidden initially) #}
+            <div id="sql-view" class="sql-view" style="display: none;" data-current-task-id="">
+                {# File Header #}
+                <div class="file-info" style="background: white; padding: 16px; border-radius: 8px 8px 0 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 0;">
+                    <h3 class="file-path" style="margin: 0 0 8px 0; font-size: 16px; font-weight: 600; color: #2d3748; word-break: break-all;"></h3>
+                    <div class="file-stats" style="font-size: 14px; color: #718096;"></div>
+                </div>
+
+                {# SQL Code Block #}
+                <div class="code-container" style="background: #1a202c; padding: 0; border-radius: 0 0 8px 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow-x: auto;">
+                    <pre class="code-block" style="margin: 0; padding: 20px; color: #e2e8f0; font-family: 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; overflow-x: auto;"><code id="sql-code-content"></code></pre>
+                </div>
+            </div>
+        </main>
+
+    </div>
+
+    {# Shared Tooltip (Single instance for all violations) #}
+    <div id="shared-tooltip" class="tooltip" style="display: none; position: fixed; background: #2d3748; color: white; padding: 12px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 10000; min-width: 280px; font-size: 12px; line-height: 1.5; pointer-events: none;">
+        <div class="tooltip-severity-badge" style="display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-bottom: 8px;"></div>
+        <div class="tooltip-rule-name" style="font-weight: 600; margin-bottom: 4px;"></div>
+        <div class="tooltip-description" style="margin-bottom: 4px; opacity: 0.9;"></div>
+        <div class="tooltip-position" style="opacity: 0.7; font-size: 11px;"></div>
+    </div>
+
+    {# Inline CSS #}
+    <style>
+        :root {
+            --severity-color-critical: #c53030;
+            --severity-color-blocker: #dd6b20;
+            --severity-color-major: #d69e2e;
+            --severity-color-minor: #3182ce;
+            --severity-color-info: #718096;
+        }
+        .severity-critical { background: var(--severity-color-critical); }
+        .severity-blocker { background: var(--severity-color-blocker); }
+        .severity-major { background: var(--severity-color-major); }
+        .severity-minor { background: var(--severity-color-minor); }
+        .severity-info { background: var(--severity-color-info); }
+        .violation-line {
+            border-left: 4px solid;
+            padding-left: 12px !important;
+            transition: all 0.3s ease;
+        }
+        .violation-line.critical {
+            background: rgba(197, 48, 48, 0.15) !important;
+            border-left-color: var(--severity-color-critical);
+        }
+        .violation-line.blocker {
+            background: rgba(221, 107, 32, 0.15) !important;
+            border-left-color: var(--severity-color-blocker);
+        }
+        .violation-line.major {
+            background: rgba(214, 158, 46, 0.15) !important;
+            border-left-color: var(--severity-color-major);
+        }
+        .violation-line.minor {
+            background: rgba(49, 130, 206, 0.15) !important;
+            border-left-color: var(--severity-color-minor);
+        }
+        .violation-line.info {
+            background: rgba(113, 128, 150, 0.15) !important;
+            border-left-color: var(--severity-color-info);
+        }
+        .violation-item.active {
+            background: #ebf4ff !important;
+            border-left: 3px solid #3182ce;
+        }
+        .code-line {
+            display: block;
+            padding: 2px 0;
+            white-space: pre;
+        }
+        .file-item.collapsed .violations-list {
+            display: none !important;
+        }
+        .file-item.collapsed .toggle-icon {
+            transform: rotate(-90deg);
+        }
+        @media print {
+            .sidebar { display: none !important; }
+            .content-panel { width: 100% !important; max-width: none !important; }
+            #shared-tooltip { display: none !important; }
+        }
+    </style>
+
+    {# JavaScript for interactivity #}
+    <script>
+        // Store files data (minified JSON)
+        const filesData={{ files|tojson|safe }};
+
+        // Shared tooltip element
+        const sharedTooltip = document.getElementById('shared-tooltip');
+
+        // Show violation and switch to SQL view
+        function showViolation(element) {
+            const taskId = element.getAttribute('data-task-id');
+            const lineNo = parseInt(element.getAttribute('data-line'));
+            const severity = element.getAttribute('data-severity');
+
+            document.querySelectorAll('.violation-item.active').forEach(item => {
+                item.classList.remove('active');
+                item.style.background = 'transparent';
+            });
+
+            element.classList.add('active');
+            element.style.background = '#ebf4ff';
+
+            document.getElementById('summary-view').style.display = 'none';
+            document.getElementById('sql-view').style.display = 'block';
+
+            const fileData = filesData.find(f => f.task_id === taskId);
+            if (!fileData) return;
+
+            document.querySelector('.file-path').textContent = fileData.source_file_path;
+            document.querySelector('.file-stats').textContent = `${fileData.total_lines} 行 | ${fileData.total_violations} 个违规项`;
+
+            const codeContainer = document.getElementById('sql-code-content');
+            codeContainer.innerHTML = '';
+
+            fileData.sql_lines.forEach((line, index) => {
+                const lineNumber = index + 1;
+                const span = document.createElement('span');
+                span.className = 'code-line';
+                span.setAttribute('data-line', lineNumber);
+
+                const lineViolations = fileData.violations.filter(v => v.line_no === lineNumber);
+                if (lineViolations.length > 0 && lineNumber === lineNo) {
+                    const violationSeverity = lineViolations[0].severity_level.toLowerCase();
+                    span.classList.add('violation-line', violationSeverity);
+                }
+
+                span.textContent = `${String(lineNumber).padStart(4, ' ')}: ${line}\n`;
+                codeContainer.appendChild(span);
+            });
+
+            setTimeout(() => {
+                const targetLine = codeContainer.querySelector(`[data-line="${lineNo}"]`);
+                if (targetLine) {
+                    targetLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }, 100);
+
+            document.getElementById('sql-view').setAttribute('data-current-task-id', taskId);
+        }
+
+        // Toggle file section
+        function toggleFileSection(element) {
+            const fileItem = element.closest('.file-item');
+            fileItem.classList.toggle('collapsed');
+        }
+
+        // Show shared tooltip
+        function showTooltip(event, element) {
+            const severity = element.getAttribute('data-severity');
+            const rule = element.getAttribute('data-rule');
+            const ruleName = element.getAttribute('data-rule-name');
+            const desc = element.getAttribute('data-desc');
+            const line = element.getAttribute('data-line');
+            const col = element.getAttribute('data-col');
+
+            // Populate tooltip
+            const badge = sharedTooltip.querySelector('.tooltip-severity-badge');
+            badge.textContent = severity;
+            badge.className = 'tooltip-severity-badge severity-' + severity.toLowerCase();
+
+            sharedTooltip.querySelector('.tooltip-rule-name').textContent = rule + ' - ' + ruleName;
+            sharedTooltip.querySelector('.tooltip-description').textContent = desc;
+            sharedTooltip.querySelector('.tooltip-position').textContent = '位置: 第' + line + '行:' + col + '列';
+
+            // Position tooltip
+            const rect = element.getBoundingClientRect();
+            sharedTooltip.style.left = (rect.right + 8) + 'px';
+            sharedTooltip.style.top = rect.top + 'px';
+            sharedTooltip.style.display = 'block';
+
+            event.stopPropagation();
+        }
+
+        // Hide shared tooltip
+        function hideTooltip() {
+            sharedTooltip.style.display = 'none';
+        }
+
+        // Filter by severity
+        function filterBySeverity() {
+            const checkboxes = document.querySelectorAll('.filter-checkboxes input[type="checkbox"]');
+            const selectedSeverities = Array.from(checkboxes)
+                .filter(cb => cb.checked)
+                .map(cb => cb.value);
+
+            document.querySelectorAll('.violation-item').forEach(item => {
+                const severity = item.getAttribute('data-severity');
+                item.style.display = selectedSeverities.includes(severity) ? 'block' : 'none';
+            });
+
+            document.querySelectorAll('.file-item').forEach(fileItem => {
+                const visibleViolations = fileItem.querySelectorAll('.violation-item[style*="display: block"], .violation-item:not([style*="display: none"])');
+                const count = visibleViolations.length;
+                const countSpan = fileItem.querySelector('.violation-count');
+                if (countSpan) {
+                    countSpan.textContent = `(${count})`;
+                }
+                fileItem.style.display = count === 0 ? 'none' : 'block';
+            });
+        }
+    </script>
+</div>
