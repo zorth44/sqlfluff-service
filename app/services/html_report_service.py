@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
 import os
+import math
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy.orm import Session
@@ -22,6 +23,24 @@ from app.utils.sql_file_reader import SQLFileReader
 
 class HtmlReportService:
     """HTML报告生成服务"""
+
+    # 严重级别中英文映射
+    SEVERITY_LABELS = {
+        'CRITICAL': '严重',
+        'BLOCKER': '阻断',
+        'MAJOR': '重要',
+        'MINOR': '次要',
+        'INFO': '提示'
+    }
+
+    # 严重级别颜色（Element UI风格）
+    SEVERITY_COLORS = {
+        'CRITICAL': '#F56C6C',  # Danger
+        'BLOCKER': '#E6A23C',   # Warning
+        'MAJOR': '#E6A23C',     # Warning
+        'MINOR': '#409EFF',     # Primary
+        'INFO': '#909399'       # Info
+    }
 
     def __init__(self):
         """初始化服务"""
@@ -175,6 +194,9 @@ class HtmlReportService:
         # 统计严重级别分布
         severity_stats = self._calculate_severity_distribution(db, job_id)
 
+        # 计算饼图路径
+        pie_chart_paths = self._calculate_pie_chart_paths(severity_stats)
+
         # 构建报告数据
         report_data = {
             'job_id': job_id,
@@ -186,7 +208,8 @@ class HtmlReportService:
                 'files_with_violations': sum(1 for f in files_data.values() if f['total_violations'] > 0),
                 'severity_distribution': severity_stats
             },
-            'severity_filters': self._get_severity_filters(all_severities)
+            'severity_filters': self._get_severity_filters(all_severities),
+            'pie_chart_paths': pie_chart_paths
         }
 
         return report_data
@@ -259,11 +282,76 @@ class HtmlReportService:
             if severity in all_severities or not all_severities:
                 filters.append({
                     'value': severity,
-                    'label': severity,
+                    'label': self.SEVERITY_LABELS.get(severity, severity),
+                    'color': self.SEVERITY_COLORS.get(severity, '#909399'),
                     'checked': True
                 })
 
         return filters
+
+    def _calculate_pie_chart_paths(self, severity_distribution: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        计算SVG饼图路径数据
+
+        Args:
+            severity_distribution: 严重级别分布数据
+
+        Returns:
+            List[Dict[str, Any]]: 饼图路径数据列表
+        """
+        if not severity_distribution:
+            return []
+
+        total = sum(item['count'] for item in severity_distribution)
+        if total == 0:
+            return []
+
+        center_x = 150
+        center_y = 150
+        radius = 100
+
+        paths = []
+        current_angle = -90  # Start at top (12 o'clock)
+
+        for item in severity_distribution:
+            severity = item['severity_level']
+            count = item['count']
+            percentage = count / total
+            angle = percentage * 360
+
+            # Special case: if angle is 360 (100% of pie), draw a full circle using two 180° arcs
+            if angle >= 359.99:
+                # Draw full circle as two semicircles
+                path_data = f"M {center_x} {center_y - radius} A {radius} {radius} 0 0 1 {center_x} {center_y + radius} A {radius} {radius} 0 0 1 {center_x} {center_y - radius} Z"
+            else:
+                # Convert to radians
+                start_angle_rad = math.radians(current_angle)
+                end_angle_rad = math.radians(current_angle + angle)
+
+                # Calculate start and end points
+                x1 = center_x + radius * math.cos(start_angle_rad)
+                y1 = center_y + radius * math.sin(start_angle_rad)
+                x2 = center_x + radius * math.cos(end_angle_rad)
+                y2 = center_y + radius * math.sin(end_angle_rad)
+
+                # Large arc flag: 1 if angle > 180°
+                large_arc = 1 if angle > 180 else 0
+
+                # Build SVG path string
+                path_data = f"M {center_x} {center_y} L {x1:.2f} {y1:.2f} A {radius} {radius} 0 {large_arc} 1 {x2:.2f} {y2:.2f} Z"
+
+            paths.append({
+                'path': path_data,
+                'severity': severity,
+                'severity_label': self.SEVERITY_LABELS.get(severity, severity),
+                'count': count,
+                'percentage': round(percentage * 100, 1),
+                'color': self.SEVERITY_COLORS.get(severity, '#909399')
+            })
+
+            current_angle += angle
+
+        return paths
 
     def _generate_error_response(
         self,

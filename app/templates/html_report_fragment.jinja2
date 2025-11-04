@@ -1,71 +1,51 @@
-{# HTML Fragment Template for SQL Linting Report - Optimized Version #}
-{# Phase 1 Optimization: Shared tooltip, data attributes, minified JSON #}
+{# HTML Fragment Template for SQL Linting Report - Element UI Style #}
+{# Optimized with pure CSS, SVG pie chart, and improved UX #}
 
 <div class="sql-report" id="sql-report-{{ job_id }}" data-job-id="{{ job_id }}">
-    {# Header #}
-    <header class="report-header" style="padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 8px 8px 0 0;">
-        <h1 style="margin: 0; font-size: 24px; font-weight: 600;">SQL核验报告</h1>
-        <div style="margin-top: 8px; opacity: 0.9; font-size: 14px;">
-            工作ID: {{ job_id }} | 生成时间: {{ created_at }}
-        </div>
-    </header>
-
     {# Main Layout: Sidebar + Content #}
-    <div class="report-layout" style="display: flex; min-height: 600px; background: #f7fafc; border-radius: 0 0 8px 8px;">
+    <div class="report-layout">
 
         {# Left Sidebar #}
-        <aside class="sidebar" style="width: 320px; background: white; border-right: 1px solid #e2e8f0; overflow-y: auto; max-height: 800px;">
-            {# Severity Filter #}
-            <div class="filter-section" style="padding: 20px; border-bottom: 1px solid #e2e8f0; background: #f7fafc;">
-                <h3 style="margin: 0 0 12px 0; font-size: 16px; font-weight: 600; color: #2d3748;">过滤器</h3>
-                <div class="filter-checkboxes" style="display: flex; flex-direction: column; gap: 8px;">
+        <aside class="sidebar">
+            {# Severity Filter - Toggle Button Style #}
+            <div class="filter-section">
+                <h3>严重级别过滤</h3>
+                <div class="filter-buttons">
                     {% for filter in severity_filters %}
-                    <label style="display: flex; align-items: center; cursor: pointer; font-size: 14px; color: #4a5568;">
-                        <input type="checkbox"
-                               value="{{ filter.value }}"
-                               {% if filter.checked %}checked{% endif %}
-                               onchange="filterBySeverity()"
-                               style="margin-right: 8px; cursor: pointer;">
-                        <span class="severity-label severity-{{ filter.value|lower }}" style="padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500;">
-                            {{ filter.label }}
-                        </span>
-                    </label>
+                    <button type="button"
+                            class="filter-btn active"
+                            data-severity="{{ filter.value }}"
+                            data-color="{{ filter.color }}"
+                            onclick="toggleFilter(this)">
+                        {{ filter.label }}
+                    </button>
                     {% endfor %}
                 </div>
             </div>
 
             {# File Tree Navigation #}
-            <nav class="file-tree" style="padding: 16px;">
+            <nav class="file-tree">
                 {% for file in files %}
-                <div class="file-item" data-task-id="{{ file.task_id }}" style="margin-bottom: 12px;">
+                <div class="file-item" data-task-id="{{ file.task_id }}">
                     {# File Header #}
-                    <div class="file-header"
-                         onclick="toggleFileSection(this)"
-                         style="display: flex; align-items: center; padding: 8px; background: #edf2f7; border-radius: 6px; cursor: pointer; user-select: none; transition: background 0.2s;"
-                         onmouseover="this.style.background='#e2e8f0'"
-                         onmouseout="this.style.background='#edf2f7'">
-                        <span class="toggle-icon" style="margin-right: 8px; font-size: 12px; transition: transform 0.2s;">▼</span>
-                        <span class="file-icon" style="margin-right: 8px;">📁</span>
-                        <span class="file-name" style="flex: 1; font-size: 13px; font-weight: 500; color: #2d3748; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ file.source_file_path }}">
+                    <div class="file-header" onclick="toggleFileSection(this)">
+                        <span class="toggle-icon">▼</span>
+                        <span class="file-icon">📁</span>
+                        <span class="file-name" title="{{ file.source_file_path }}">
                             {{ file.file_name }}
                         </span>
-                        <span class="violation-count" style="font-size: 12px; color: #718096; background: white; padding: 2px 6px; border-radius: 10px;">
-                            ({{ file.total_violations }})
-                        </span>
+                        <span class="violation-count">({{ file.total_violations }})</span>
                     </div>
 
                     {# Violations List #}
-                    <ul class="violations-list" style="list-style: none; margin: 8px 0 0 0; padding: 0 0 0 24px; display: block;">
+                    <ul class="violations-list">
                         {% for violation in file.violations %}
                         <li class="violation-item"
                             data-task-id="{{ file.task_id }}"
                             data-line="{{ violation.line_no }}"
                             data-severity="{{ violation.severity_level }}"
-                            onclick="showViolation(this)"
-                            style="padding: 6px 8px; margin-bottom: 4px; border-radius: 4px; cursor: pointer; transition: background 0.2s; font-size: 13px; position: relative;"
-                            onmouseover="this.style.background='#f7fafc'"
-                            onmouseout="if(!this.classList.contains('active')){this.style.background='transparent'}">
-                            <span class="line-number" style="color: #a0aec0; margin-right: 4px;">{{ violation.line_no }}:</span>
+                            onclick="showViolation(this)">
+                            <span class="line-number">{{ violation.line_no }}</span>
                             <span class="rule-code severity-{{ violation.severity_level|lower }}"
                                   data-severity="{{ violation.severity_level }}"
                                   data-rule="{{ violation.rule_code }}"
@@ -74,8 +54,7 @@
                                   data-line="{{ violation.line_no }}"
                                   data-col="{{ violation.column_no }}"
                                   onmouseenter="showTooltip(event, this)"
-                                  onmouseleave="hideTooltip()"
-                                  style="padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; color: white; cursor: help;">
+                                  onmouseleave="hideTooltip()">
                                 {{ violation.rule_code }}
                             </span>
                         </li>
@@ -87,144 +66,699 @@
         </aside>
 
         {# Right Panel #}
-        <main class="content-panel" style="flex: 1; padding: 24px; overflow-y: auto; max-height: 800px;">
+        <main class="content-panel">
             {# Initial State: Summary View #}
-            <div id="summary-view" class="summary-view" style="display: block;">
-                <h2 style="margin: 0 0 24px 0; font-size: 24px; font-weight: 600; color: #2d3748;">📊 SQL核验报告汇总</h2>
+            <div id="summary-view" class="summary-view">
+                <h2>SQL核验报告</h2>
 
-                <div class="stats-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 32px;">
-                    <div class="stat-card" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                        <div class="stat-label" style="font-size: 14px; color: #718096; margin-bottom: 8px;">总文件数</div>
-                        <div class="stat-value" style="font-size: 32px; font-weight: 700; color: #2d3748;">{{ summary.total_files }}</div>
+                {# Stats Grid #}
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">总文件数</div>
+                        <div class="stat-value">{{ summary.total_files }}</div>
                     </div>
-                    <div class="stat-card" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                        <div class="stat-label" style="font-size: 14px; color: #718096; margin-bottom: 8px;">总违规项</div>
-                        <div class="stat-value" style="font-size: 32px; font-weight: 700; color: #e53e3e;">{{ summary.total_violations }}</div>
+                    <div class="stat-card">
+                        <div class="stat-label">总违规项</div>
+                        <div class="stat-value stat-danger">{{ summary.total_violations }}</div>
                     </div>
-                    <div class="stat-card" style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                        <div class="stat-label" style="font-size: 14px; color: #718096; margin-bottom: 8px;">存在问题的文件</div>
-                        <div class="stat-value" style="font-size: 32px; font-weight: 700; color: #dd6b20;">{{ summary.files_with_violations }}</div>
+                    <div class="stat-card">
+                        <div class="stat-label">存在问题的文件</div>
+                        <div class="stat-value stat-warning">{{ summary.files_with_violations }}</div>
                     </div>
                 </div>
 
-                {# Severity Distribution #}
-                <div class="severity-distribution" style="background: white; padding: 24px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                    <h3 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #2d3748;">严重级别分布</h3>
-                    <div class="severity-bars" style="display: flex; flex-direction: column; gap: 12px;">
-                        {% for sev in summary.severity_distribution %}
-                        <div class="severity-bar" style="display: flex; align-items: center; gap: 12px;">
-                            <span class="severity-label severity-{{ sev.severity_level|lower }}" style="min-width: 100px; padding: 6px 12px; border-radius: 4px; font-size: 13px; font-weight: 600; text-align: center; color: white;">
-                                {{ sev.severity_level }}
-                            </span>
-                            <div style="flex: 1; background: #e2e8f0; height: 24px; border-radius: 12px; overflow: hidden; position: relative;">
-                                <div style="background: var(--severity-color-{{ sev.severity_level|lower }}); height: 100%; width: {{ (sev.count / summary.total_violations * 100)|round|int }}%; transition: width 0.3s;"></div>
+                {# Severity Distribution - Simple Card Style #}
+                <div class="severity-section">
+                    <h3>严重级别分布</h3>
+                    {# Define all severity levels and their metadata #}
+                    {% set all_severities = [
+                        {'level': 'CRITICAL', 'label': '严重', 'color': '#F56C6C'},
+                        {'level': 'BLOCKER', 'label': '阻断', 'color': '#E6A23C'},
+                        {'level': 'MAJOR', 'label': '重要', 'color': '#E6A23C'},
+                        {'level': 'MINOR', 'label': '次要', 'color': '#409EFF'},
+                        {'level': 'INFO', 'label': '提示', 'color': '#909399'}
+                    ] %}
+
+                    {# Create a map of severity_level -> count from summary data #}
+                    {% set severity_map = {} %}
+                    {% for sev in summary.severity_distribution %}
+                        {% set _ = severity_map.update({sev.severity_level: sev.count}) %}
+                    {% endfor %}
+
+                    <div class="severity-cards-container">
+                        {% for severity in all_severities %}
+                        {% set count = severity_map.get(severity.level, 0) %}
+                        {% set percentage = (count / summary.total_violations * 100)|round(1) if summary.total_violations > 0 else 0 %}
+                        <div class="severity-card">
+                            <div class="severity-card-header">
+                                <div class="severity-indicator" style="background: {{ severity.color }};"></div>
+                                <div class="severity-label">{{ severity.label }}</div>
                             </div>
-                            <span class="severity-count" style="min-width: 60px; text-align: right; font-weight: 600; color: #4a5568; font-size: 16px;">
-                                {{ sev.count }}
-                            </span>
+                            <div class="severity-count">{{ count }}</div>
+                            <div class="severity-percentage">{{ percentage }}%</div>
+                            <div class="severity-bar-container">
+                                <div class="severity-bar" style="width: {{ percentage }}%; background: {{ severity.color }};"></div>
+                            </div>
                         </div>
                         {% endfor %}
                     </div>
                 </div>
 
-                <p class="hint" style="margin-top: 32px; text-align: center; color: #a0aec0; font-size: 14px;">
-                    ← 点击左侧违规项查看详细SQL代码
-                </p>
+                {# Hint #}
+                <div class="hint-box">
+                    <span class="hint-icon">💡</span>
+                    <span class="hint-text">点击左侧违规项查看详细SQL代码</span>
+                </div>
             </div>
 
             {# SQL File View (hidden initially) #}
-            <div id="sql-view" class="sql-view" style="display: none;" data-current-task-id="">
+            <div id="sql-view" class="sql-view" data-current-task-id="">
                 {# File Header #}
-                <div class="file-info" style="background: white; padding: 16px; border-radius: 8px 8px 0 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 0;">
-                    <h3 class="file-path" style="margin: 0 0 8px 0; font-size: 16px; font-weight: 600; color: #2d3748; word-break: break-all;"></h3>
-                    <div class="file-stats" style="font-size: 14px; color: #718096;"></div>
+                <div class="file-info">
+                    <h3 class="file-path"></h3>
+                    <div class="file-stats"></div>
                 </div>
 
-                {# SQL Code Block #}
-                <div class="code-container" style="background: #1a202c; padding: 0; border-radius: 0 0 8px 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow-x: auto;">
-                    <pre class="code-block" style="margin: 0; padding: 20px; color: #e2e8f0; font-family: 'Monaco', 'Menlo', 'Consolas', monospace; font-size: 13px; line-height: 1.6; overflow-x: auto;"><code id="sql-code-content"></code></pre>
+                {# SQL Code Block with Gutter #}
+                <div class="code-container">
+                    <div class="code-gutter" id="code-gutter"></div>
+                    <pre class="code-block"><code id="sql-code-content"></code></pre>
                 </div>
             </div>
         </main>
 
     </div>
 
-    {# Shared Tooltip (Single instance for all violations) #}
-    <div id="shared-tooltip" class="tooltip" style="display: none; position: fixed; background: #2d3748; color: white; padding: 12px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 10000; min-width: 280px; font-size: 12px; line-height: 1.5; pointer-events: none;">
-        <div class="tooltip-severity-badge" style="display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-bottom: 8px;"></div>
-        <div class="tooltip-rule-name" style="font-weight: 600; margin-bottom: 4px;"></div>
-        <div class="tooltip-description" style="margin-bottom: 4px; opacity: 0.9;"></div>
-        <div class="tooltip-position" style="opacity: 0.7; font-size: 11px;"></div>
+    {# Shared Tooltip #}
+    <div id="shared-tooltip" class="tooltip">
+        <div class="tooltip-severity-badge"></div>
+        <div class="tooltip-rule-name"></div>
+        <div class="tooltip-description"></div>
+        <div class="tooltip-position"></div>
     </div>
 
-    {# Inline CSS #}
+    {# Pure CSS Styles - Element UI Theme #}
     <style>
+        /* Root Variables - Element UI Colors */
         :root {
-            --severity-color-critical: #c53030;
-            --severity-color-blocker: #dd6b20;
-            --severity-color-major: #d69e2e;
-            --severity-color-minor: #3182ce;
-            --severity-color-info: #718096;
+            --el-color-primary: #409EFF;
+            --el-color-success: #67C23A;
+            --el-color-warning: #E6A23C;
+            --el-color-danger: #F56C6C;
+            --el-color-info: #909399;
+            --el-color-text-primary: #303133;
+            --el-color-text-regular: #606266;
+            --el-color-text-secondary: #909399;
+            --el-border-color: #DCDFE6;
+            --el-border-color-light: #E4E7ED;
+            --el-bg-color: #FFFFFF;
+            --el-fill-color-light: #F5F7FA;
+            --el-fill-color-lighter: #FAFAFA;
         }
-        .severity-critical { background: var(--severity-color-critical); }
-        .severity-blocker { background: var(--severity-color-blocker); }
-        .severity-major { background: var(--severity-color-major); }
-        .severity-minor { background: var(--severity-color-minor); }
-        .severity-info { background: var(--severity-color-info); }
-        .violation-line {
-            border-left: 4px solid;
-            padding-left: 12px !important;
-            transition: all 0.3s ease;
+
+        /* Report Container */
+        .sql-report {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            font-size: 14px;
+            color: var(--el-color-text-primary);
+            background: var(--el-fill-color-lighter);
+            border-radius: 4px;
+            overflow: hidden;
         }
-        .violation-line.critical {
-            background: rgba(197, 48, 48, 0.15) !important;
-            border-left-color: var(--severity-color-critical);
+
+        /* Main Layout */
+        .report-layout {
+            display: flex;
+            height: 700px;
+            background: var(--el-fill-color-lighter);
         }
-        .violation-line.blocker {
-            background: rgba(221, 107, 32, 0.15) !important;
-            border-left-color: var(--severity-color-blocker);
+
+        /* Sidebar */
+        .sidebar {
+            width: 340px;
+            background: var(--el-bg-color);
+            border-right: 1px solid var(--el-border-color);
+            overflow-y: auto;
+            height: 100%;
         }
-        .violation-line.major {
-            background: rgba(214, 158, 46, 0.15) !important;
-            border-left-color: var(--severity-color-major);
+
+        /* Filter Section */
+        .filter-section {
+            padding: 20px;
+            border-bottom: 1px solid var(--el-border-color-light);
+            background: var(--el-fill-color-light);
         }
-        .violation-line.minor {
-            background: rgba(49, 130, 206, 0.15) !important;
-            border-left-color: var(--severity-color-minor);
+
+        .filter-section h3 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--el-color-text-primary);
         }
-        .violation-line.info {
-            background: rgba(113, 128, 150, 0.15) !important;
-            border-left-color: var(--severity-color-info);
+
+        .filter-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
         }
-        .violation-item.active {
-            background: #ebf4ff !important;
-            border-left: 3px solid #3182ce;
+
+        .filter-btn {
+            padding: 6px 16px;
+            border: 1px solid var(--el-border-color);
+            border-radius: 4px;
+            background: var(--el-bg-color);
+            color: var(--el-color-text-regular);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+            outline: none;
         }
-        .code-line {
+
+        .filter-btn:hover {
+            border-color: var(--el-color-primary);
+            color: var(--el-color-primary);
+        }
+
+        .filter-btn.active {
+            color: white;
+            border-color: transparent;
+        }
+
+        .filter-btn.active:hover {
+            opacity: 0.8;
+        }
+
+        /* File Tree */
+        .file-tree {
+            padding: 16px;
+        }
+
+        .file-item {
+            margin-bottom: 12px;
+        }
+
+        .file-header {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            background: var(--el-fill-color-light);
+            border-radius: 4px;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.2s;
+        }
+
+        .file-header:hover {
+            background: var(--el-border-color-light);
+        }
+
+        .toggle-icon {
+            margin-right: 8px;
+            font-size: 10px;
+            transition: transform 0.2s;
+            color: var(--el-color-text-secondary);
+        }
+
+        .file-icon {
+            margin-right: 8px;
+        }
+
+        .file-name {
+            flex: 1;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--el-color-text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .violation-count {
+            font-size: 12px;
+            color: var(--el-color-text-secondary);
+            background: var(--el-bg-color);
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        /* Violations List */
+        .violations-list {
+            list-style: none;
+            margin: 8px 0 0 0;
+            padding: 0;
             display: block;
-            padding: 2px 0;
-            white-space: pre;
         }
+
+        .violation-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 12px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+        }
+
+        .violation-item:hover {
+            background: var(--el-fill-color-light);
+        }
+
+        .violation-item.active {
+            background: #ecf5ff;
+            border-left: 3px solid var(--el-color-primary);
+            padding-left: 9px;
+        }
+
+        .line-number {
+            display: inline-block;
+            width: 3.5em;
+            text-align: right;
+            color: var(--el-color-text-secondary);
+            margin-right: 8px;
+            font-size: 12px;
+            font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+        }
+
+        .rule-code {
+            padding: 3px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+            color: white;
+            cursor: help;
+        }
+
+        .severity-critical { background: #F56C6C; }
+        .severity-blocker { background: #E6A23C; }
+        .severity-major { background: #E6A23C; }
+        .severity-minor { background: #409EFF; }
+        .severity-info { background: #909399; }
+
+        /* File Collapsed State */
         .file-item.collapsed .violations-list {
-            display: none !important;
+            display: none;
         }
+
         .file-item.collapsed .toggle-icon {
             transform: rotate(-90deg);
         }
+
+        /* Content Panel */
+        .content-panel {
+            flex: 1;
+            padding: 32px;
+            overflow-y: auto;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Summary View */
+        .summary-view {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-around;
+            min-height: 600px;
+        }
+
+        .summary-view h2 {
+            margin: 0 0 24px 0;
+            font-size: 26px;
+            font-weight: 600;
+            color: var(--el-color-text-primary);
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .stat-card {
+            background: var(--el-bg-color);
+            padding: 24px;
+            border-radius: 4px;
+            box-shadow: 0 2px 12px 0 rgba(0,0,0,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px 0 rgba(0,0,0,0.15);
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: var(--el-color-text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 36px;
+            font-weight: 700;
+            color: var(--el-color-text-primary);
+        }
+
+        .stat-value.stat-danger {
+            color: var(--el-color-danger);
+        }
+
+        .stat-value.stat-warning {
+            color: var(--el-color-warning);
+        }
+
+        /* Severity Section */
+        .severity-section {
+            background: var(--el-bg-color);
+            padding: 28px;
+            border-radius: 4px;
+            box-shadow: 0 2px 12px 0 rgba(0,0,0,0.1);
+            margin-bottom: 32px;
+        }
+
+        .severity-section h3 {
+            margin: 0 0 24px 0;
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--el-color-text-primary);
+        }
+
+        /* Severity Cards Container */
+        .severity-cards-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .severity-card {
+            background: var(--el-fill-color-light);
+            padding: 20px;
+            border-radius: 4px;
+            transition: transform 0.2s, box-shadow 0.2s;
+            border: 1px solid var(--el-border-color-light);
+        }
+
+        .severity-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px 0 rgba(0,0,0,0.1);
+        }
+
+        .severity-card-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .severity-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            margin-right: 8px;
+        }
+
+        .severity-label {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--el-color-text-primary);
+        }
+
+        .severity-count {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--el-color-text-primary);
+            margin-bottom: 4px;
+        }
+
+        .severity-percentage {
+            font-size: 13px;
+            color: var(--el-color-text-secondary);
+            margin-bottom: 12px;
+        }
+
+        .severity-bar-container {
+            width: 100%;
+            height: 6px;
+            background: var(--el-border-color-light);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .severity-bar {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        /* Hint Box */
+        .hint-box {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+            border: 2px dashed var(--el-color-primary);
+            border-radius: 4px;
+            gap: 12px;
+        }
+
+        .hint-icon {
+            font-size: 24px;
+        }
+
+        .hint-text {
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--el-color-text-primary);
+        }
+
+        /* SQL View */
+        .sql-view {
+            display: none;
+        }
+
+        .file-info {
+            background: var(--el-bg-color);
+            padding: 20px;
+            border-radius: 4px 4px 0 0;
+            box-shadow: 0 2px 12px 0 rgba(0,0,0,0.1);
+            margin-bottom: 0;
+        }
+
+        .file-path {
+            margin: 0 0 8px 0;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--el-color-text-primary);
+            word-break: break-all;
+        }
+
+        .file-stats {
+            font-size: 13px;
+            color: var(--el-color-text-secondary);
+        }
+
+        /* Code Container with Gutter */
+        .code-container {
+            display: flex;
+            background: #1e1e1e;
+            border-radius: 0 0 4px 4px;
+            box-shadow: 0 2px 12px 0 rgba(0,0,0,0.1);
+            overflow-x: auto;
+        }
+
+        .code-gutter {
+            background: #252526;
+            color: #858585;
+            padding: 16px 0;
+            text-align: right;
+            user-select: none;
+            border-right: 1px solid #3e3e42;
+            min-width: 60px;
+            font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .gutter-line {
+            padding: 0 12px;
+            height: 20.8px;
+        }
+
+        .gutter-line.violation-line {
+            background: rgba(255, 255, 255, 0.05);
+            font-weight: 600;
+        }
+
+        .code-block {
+            margin: 0;
+            padding: 16px 20px;
+            color: #d4d4d4;
+            font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            overflow-x: auto;
+            flex: 1;
+        }
+
+        .code-line {
+            display: block;
+            min-height: 20.8px;
+            transition: background 0.2s;
+        }
+
+        .code-line.violation-line {
+            border-left: 4px solid;
+            padding-left: 12px;
+            margin-left: -16px;
+        }
+
+        .code-line.violation-line.critical {
+            background: rgba(245, 108, 108, 0.15);
+            border-left-color: #F56C6C;
+        }
+
+        .code-line.violation-line.blocker {
+            background: rgba(230, 162, 60, 0.15);
+            border-left-color: #E6A23C;
+        }
+
+        .code-line.violation-line.major {
+            background: rgba(230, 162, 60, 0.15);
+            border-left-color: #E6A23C;
+        }
+
+        .code-line.violation-line.minor {
+            background: rgba(64, 158, 255, 0.15);
+            border-left-color: #409EFF;
+        }
+
+        .code-line.violation-line.info {
+            background: rgba(144, 147, 153, 0.15);
+            border-left-color: #909399;
+        }
+
+        /* SQL Syntax Highlighting */
+        .sql-keyword { color: #569CD6; font-weight: 600; }
+        .sql-string { color: #CE9178; }
+        .sql-number { color: #B5CEA8; }
+        .sql-comment { color: #6A9955; font-style: italic; }
+        .sql-operator { color: #D4D4D4; }
+        .sql-function { color: #DCDCAA; }
+
+        /* Tooltip */
+        .tooltip {
+            display: none;
+            position: fixed;
+            background: #303133;
+            color: white;
+            padding: 12px 16px;
+            border-radius: 4px;
+            box-shadow: 0 2px 12px 0 rgba(0,0,0,0.3);
+            z-index: 10000;
+            min-width: 280px;
+            font-size: 12px;
+            line-height: 1.6;
+            pointer-events: none;
+        }
+
+        .tooltip-severity-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .tooltip-rule-name {
+            font-weight: 600;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+
+        .tooltip-description {
+            margin-bottom: 6px;
+            opacity: 0.9;
+        }
+
+        .tooltip-position {
+            opacity: 0.7;
+            font-size: 11px;
+        }
+
+        /* Print Styles */
         @media print {
-            .sidebar { display: none !important; }
-            .content-panel { width: 100% !important; max-width: none !important; }
-            #shared-tooltip { display: none !important; }
+            .sidebar { display: none; }
+            .content-panel { width: 100%; max-width: none; }
+            .tooltip { display: none; }
         }
     </style>
 
-    {# JavaScript for interactivity #}
+    {# JavaScript for Interactivity #}
     <script>
-        // Store files data (minified JSON)
-        const filesData={{ files|tojson|safe }};
+        // Store files data
+        const filesData = {{ files|tojson|safe }};
 
         // Shared tooltip element
         const sharedTooltip = document.getElementById('shared-tooltip');
+
+        // Severity label mapping (English to Chinese)
+        const severityLabels = {
+            'CRITICAL': '严重',
+            'BLOCKER': '阻断',
+            'MAJOR': '重要',
+            'MINOR': '次要',
+            'INFO': '提示'
+        };
+
+        // Toggle filter button
+        function toggleFilter(button) {
+            button.classList.toggle('active');
+
+            // Update button background color based on active state
+            if (button.classList.contains('active')) {
+                const color = button.getAttribute('data-color');
+                button.style.background = color;
+            } else {
+                button.style.background = '';
+            }
+
+            filterBySeverity();
+        }
+
+        // Filter violations by severity
+        function filterBySeverity() {
+            const activeButtons = document.querySelectorAll('.filter-btn.active');
+            const selectedSeverities = Array.from(activeButtons).map(btn => btn.getAttribute('data-severity'));
+
+            document.querySelectorAll('.violation-item').forEach(item => {
+                const severity = item.getAttribute('data-severity');
+                item.style.display = selectedSeverities.includes(severity) ? 'flex' : 'none';
+            });
+
+            document.querySelectorAll('.file-item').forEach(fileItem => {
+                const visibleViolations = Array.from(fileItem.querySelectorAll('.violation-item'))
+                    .filter(item => item.style.display !== 'none');
+                const count = visibleViolations.length;
+                const countSpan = fileItem.querySelector('.violation-count');
+                if (countSpan) {
+                    countSpan.textContent = `(${count})`;
+                }
+                fileItem.style.display = count === 0 ? 'none' : 'block';
+            });
+        }
+
+        // Initialize filter button colors
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('.filter-btn.active').forEach(btn => {
+                const color = btn.getAttribute('data-color');
+                btn.style.background = color;
+            });
+        });
 
         // Show violation and switch to SQL view
         function showViolation(element) {
@@ -232,14 +766,14 @@
             const lineNo = parseInt(element.getAttribute('data-line'));
             const severity = element.getAttribute('data-severity');
 
+            // Remove previous active states
             document.querySelectorAll('.violation-item.active').forEach(item => {
                 item.classList.remove('active');
-                item.style.background = 'transparent';
             });
 
             element.classList.add('active');
-            element.style.background = '#ebf4ff';
 
+            // Switch to SQL view
             document.getElementById('summary-view').style.display = 'none';
             document.getElementById('sql-view').style.display = 'block';
 
@@ -250,24 +784,39 @@
             document.querySelector('.file-stats').textContent = `${fileData.total_lines} 行 | ${fileData.total_violations} 个违规项`;
 
             const codeContainer = document.getElementById('sql-code-content');
+            const gutterContainer = document.getElementById('code-gutter');
+
             codeContainer.innerHTML = '';
+            gutterContainer.innerHTML = '';
 
             fileData.sql_lines.forEach((line, index) => {
                 const lineNumber = index + 1;
-                const span = document.createElement('span');
-                span.className = 'code-line';
-                span.setAttribute('data-line', lineNumber);
+
+                // Create gutter line
+                const gutterLine = document.createElement('div');
+                gutterLine.className = 'gutter-line';
+                gutterLine.textContent = lineNumber;
+
+                // Create code line
+                const codeLine = document.createElement('span');
+                codeLine.className = 'code-line';
+                codeLine.setAttribute('data-line', lineNumber);
 
                 const lineViolations = fileData.violations.filter(v => v.line_no === lineNumber);
                 if (lineViolations.length > 0 && lineNumber === lineNo) {
                     const violationSeverity = lineViolations[0].severity_level.toLowerCase();
-                    span.classList.add('violation-line', violationSeverity);
+                    codeLine.classList.add('violation-line', violationSeverity);
+                    gutterLine.classList.add('violation-line');
                 }
 
-                span.textContent = `${String(lineNumber).padStart(4, ' ')}: ${line}\n`;
-                codeContainer.appendChild(span);
+                // Apply SQL syntax highlighting
+                codeLine.innerHTML = highlightSQL(line) + '\n';
+
+                codeContainer.appendChild(codeLine);
+                gutterContainer.appendChild(gutterLine);
             });
 
+            // Scroll to violation line
             setTimeout(() => {
                 const targetLine = codeContainer.querySelector(`[data-line="${lineNo}"]`);
                 if (targetLine) {
@@ -276,6 +825,32 @@
             }, 100);
 
             document.getElementById('sql-view').setAttribute('data-current-task-id', taskId);
+        }
+
+        // Simple SQL syntax highlighter
+        function highlightSQL(code) {
+            // SQL keywords
+            const keywords = /\b(SELECT|FROM|WHERE|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TABLE|INDEX|VIEW|JOIN|LEFT|RIGHT|INNER|OUTER|ON|AS|AND|OR|NOT|IN|EXISTS|BETWEEN|LIKE|IS|NULL|ORDER BY|GROUP BY|HAVING|LIMIT|OFFSET|UNION|CASE|WHEN|THEN|ELSE|END)\b/gi;
+
+            // String literals
+            const strings = /('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/g;
+
+            // Numbers
+            const numbers = /\b\d+(\.\d+)?\b/g;
+
+            // Comments
+            const comments = /(--[^\n]*|\/\*[\s\S]*?\*\/)/g;
+
+            // Escape HTML
+            code = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+            // Apply highlighting
+            code = code.replace(comments, '<span class="sql-comment">$1</span>');
+            code = code.replace(strings, '<span class="sql-string">$1</span>');
+            code = code.replace(numbers, '<span class="sql-number">$&</span>');
+            code = code.replace(keywords, '<span class="sql-keyword">$&</span>');
+
+            return code;
         }
 
         // Toggle file section
@@ -295,7 +870,7 @@
 
             // Populate tooltip
             const badge = sharedTooltip.querySelector('.tooltip-severity-badge');
-            badge.textContent = severity;
+            badge.textContent = severityLabels[severity] || severity;
             badge.className = 'tooltip-severity-badge severity-' + severity.toLowerCase();
 
             sharedTooltip.querySelector('.tooltip-rule-name').textContent = rule + ' - ' + ruleName;
@@ -304,7 +879,7 @@
 
             // Position tooltip
             const rect = element.getBoundingClientRect();
-            sharedTooltip.style.left = (rect.right + 8) + 'px';
+            sharedTooltip.style.left = (rect.right + 10) + 'px';
             sharedTooltip.style.top = rect.top + 'px';
             sharedTooltip.style.display = 'block';
 
@@ -314,29 +889,6 @@
         // Hide shared tooltip
         function hideTooltip() {
             sharedTooltip.style.display = 'none';
-        }
-
-        // Filter by severity
-        function filterBySeverity() {
-            const checkboxes = document.querySelectorAll('.filter-checkboxes input[type="checkbox"]');
-            const selectedSeverities = Array.from(checkboxes)
-                .filter(cb => cb.checked)
-                .map(cb => cb.value);
-
-            document.querySelectorAll('.violation-item').forEach(item => {
-                const severity = item.getAttribute('data-severity');
-                item.style.display = selectedSeverities.includes(severity) ? 'block' : 'none';
-            });
-
-            document.querySelectorAll('.file-item').forEach(fileItem => {
-                const visibleViolations = fileItem.querySelectorAll('.violation-item[style*="display: block"], .violation-item:not([style*="display: none"])');
-                const count = visibleViolations.length;
-                const countSpan = fileItem.querySelector('.violation-count');
-                if (countSpan) {
-                    countSpan.textContent = `(${count})`;
-                }
-                fileItem.style.display = count === 0 ? 'none' : 'block';
-            });
         }
     </script>
 </div>
