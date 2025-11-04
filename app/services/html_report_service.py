@@ -36,7 +36,7 @@ class HtmlReportService:
     # 严重级别颜色（Element UI风格）
     SEVERITY_COLORS = {
         'CRITICAL': '#F56C6C',  # Danger
-        'BLOCKER': '#E6A23C',   # Warning
+        'BLOCKER': '#C0392B',   # Dark Red/Crimson
         'MAJOR': '#E6A23C',     # Warning
         'MINOR': '#409EFF',     # Primary
         'INFO': '#909399'       # Info

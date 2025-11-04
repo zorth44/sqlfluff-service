@@ -93,7 +93,7 @@
                     {# Define all severity levels and their metadata #}
                     {% set all_severities = [
                         {'level': 'CRITICAL', 'label': '严重', 'color': '#F56C6C'},
-                        {'level': 'BLOCKER', 'label': '阻断', 'color': '#E6A23C'},
+                        {'level': 'BLOCKER', 'label': '阻断', 'color': '#C0392B'},
                         {'level': 'MAJOR', 'label': '重要', 'color': '#E6A23C'},
                         {'level': 'MINOR', 'label': '次要', 'color': '#409EFF'},
                         {'level': 'INFO', 'label': '提示', 'color': '#909399'}
@@ -184,12 +184,13 @@
             background: var(--el-fill-color-lighter);
             border-radius: 4px;
             overflow: hidden;
+            height: 100%;
         }
 
         /* Main Layout */
         .report-layout {
             display: flex;
-            height: 700px;
+            height: 100%;
             background: var(--el-fill-color-lighter);
         }
 
@@ -351,7 +352,7 @@
         }
 
         .severity-critical { background: #F56C6C; }
-        .severity-blocker { background: #E6A23C; }
+        .severity-blocker { background: #C0392B; }
         .severity-major { background: #E6A23C; }
         .severity-minor { background: #409EFF; }
         .severity-info { background: #909399; }
@@ -369,18 +370,18 @@
         .content-panel {
             flex: 1;
             padding: 32px;
-            overflow-y: auto;
             height: 100%;
             display: flex;
             flex-direction: column;
+            box-sizing: border-box;
+            overflow-y: auto;
         }
 
         /* Summary View */
         .summary-view {
             display: flex;
             flex-direction: column;
-            justify-content: space-around;
-            min-height: 600px;
+            justify-content: flex-start;
         }
 
         .summary-view h2 {
@@ -538,6 +539,7 @@
         /* SQL View */
         .sql-view {
             display: none;
+            flex-direction: column;
         }
 
         .file-info {
@@ -622,8 +624,8 @@
         }
 
         .code-line.violation-line.blocker {
-            background: rgba(230, 162, 60, 0.15);
-            border-left-color: #E6A23C;
+            background: rgba(192, 57, 43, 0.15);
+            border-left-color: #C0392B;
         }
 
         .code-line.violation-line.major {
@@ -775,7 +777,7 @@
 
             // Switch to SQL view
             document.getElementById('summary-view').style.display = 'none';
-            document.getElementById('sql-view').style.display = 'block';
+            document.getElementById('sql-view').style.display = 'flex';
 
             const fileData = filesData.find(f => f.task_id === taskId);
             if (!fileData) return;
