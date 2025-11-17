@@ -17,7 +17,8 @@ from app.services.task_service import TaskService
 from app.schemas.task import (
     TaskDetailResponse, TaskResultContent, TaskListResponse,
     TaskStatistics, TaskRetryRequest, TaskRetryResponse,
-    TaskLintResultResponse, SeverityLevelStatistics, TaskSeverityCalculateResponse
+    TaskLintResultResponse, SeverityLevelStatistics, TaskSeverityCalculateResponse,
+    TaskWithViolationsListResponse
 )
 from app.schemas.common import TaskStatusEnum
 from app.core.logging import api_logger
@@ -386,10 +387,12 @@ async def get_severity_level_statistics(
     task_service: TaskService = Depends(get_task_service)
 ):
     """
-    获取Severity Level统计信息
+    获取Severity Level统计信息（旧版本 - 基于JSON文件）
     
     统计指定Job下所有任务结果中不同severity_level的违规项数量分布。
     只统计状态为SUCCESS的任务。
+    
+    **注意**：此接口为旧版本，建议使用 `/tasks/severity-statistics/v2` 接口，性能更好且支持申诉过滤。
     """
     try:
         api_logger.info(f"获取Severity Level统计: {job_id}")
@@ -405,6 +408,39 @@ async def get_severity_level_statistics(
         raise handle_service_exception(e, "获取Severity Level统计")
 
 
+@router.get("/tasks/severity-statistics/v2", response_model=SeverityLevelStatistics)
+async def get_severity_level_statistics_v2(
+    job_id: str = Query(..., description="Job ID"),
+    task_service: TaskService = Depends(get_task_service)
+):
+    """
+    获取Severity Level统计信息（V2版本 - 基于数据库查询，推荐使用）
+    
+    统计指定Job下所有任务结果中不同severity_level的违规项数量分布。
+    
+    **与旧版本的区别**：
+    1. 直接查询linting_violations表，性能更优（无需读取JSON文件）
+    2. 统计时自动剔除is_appealed=1的violations（已申诉的违规项）
+    3. 新增appealed字段，统计所有已申诉的违规项数量
+    
+    **返回字段说明**：
+    - INFO/MINOR/MAJOR/BLOCKER/CRITICAL/UNKNOWN: 各级别的未申诉违规项数量
+    - appealed: 已申诉的违规项总数（所有级别）
+    """
+    try:
+        api_logger.info(f"获取Severity Level统计(V2): {job_id}")
+        
+        # 调用业务服务获取统计信息
+        statistics = await task_service.get_severity_level_statistics_v2(job_id)
+        
+        api_logger.debug(f"Severity Level统计查询成功(V2): {job_id}")
+        return statistics
+        
+    except Exception as e:
+        api_logger.error(f"获取Severity Level统计失败(V2): {job_id}, 错误: {e}")
+        raise handle_service_exception(e, "获取Severity Level统计(V2)")
+
+
 @router.get("/tasks/by-severity-level", response_model=TaskListResponse)
 async def get_tasks_by_severity_level(
     job_id: str = Query(..., description="Job ID"),
@@ -415,10 +451,12 @@ async def get_tasks_by_severity_level(
     task_service: TaskService = Depends(get_task_service)
 ):
     """
-    按Severity Level获取任务列表
+    按Severity Level获取任务列表（旧版本 - 基于JSON文件）
     
     返回指定Job下包含指定severity_level违规项的任务列表，支持分页和过滤。
     只查询状态为SUCCESS的任务。
+    
+    **注意**：此接口为旧版本，建议使用 `/tasks/by-severity-level/v2` 接口，性能更好且功能更强大。
     """
     try:
         page, size = pagination
@@ -441,6 +479,84 @@ async def get_tasks_by_severity_level(
     except Exception as e:
         api_logger.error(f"按Severity Level查询任务失败: {job_id}, Level={severity_level}, 错误: {e}")
         raise handle_service_exception(e, "按Severity Level查询任务列表")
+
+
+@router.get("/tasks/by-severity-level/v2", response_model=TaskWithViolationsListResponse)
+async def get_tasks_by_severity_level_v2(
+    job_id: str = Query(..., description="Job ID（必填）"),
+    severity_level: Optional[str] = Query(
+        None,
+        description="Severity Level过滤（可选）：INFO/MINOR/MAJOR/BLOCKER/CRITICAL/UNKNOWN/is_appealed，不传则返回所有级别"
+    ),
+    include_appealed: bool = Query(
+        False,
+        description="是否包含已申诉的violations（默认false，仅当severity_level不为is_appealed时有效）"
+    ),
+    pagination: tuple[int, int] = Depends(get_pagination_params),
+    status_filter: Optional[TaskStatusEnum] = Query(None, alias="status", description="任务状态过滤"),
+    task_service: TaskService = Depends(get_task_service)
+):
+    """
+    按Severity Level获取任务列表及violations详情（V2版本 - 基于数据库查询，推荐使用）
+    
+    **与旧版本的区别**：
+    1. 直接查询linting_violations表，性能更优（无需读取JSON文件）
+    2. severity_level为可选参数，不传则返回所有级别的violations
+    3. 支持severity_level="is_appealed"，专门查询已申诉的violations
+    4. 支持include_appealed参数，控制是否包含已申诉的violations
+    5. 返回每个task的matched_violations详细信息，包含violation_id和is_appealed字段
+    
+    **参数说明**：
+    - `job_id`: Job ID（必填）
+    - `severity_level`: Severity Level过滤（可选）
+      - 不传：返回所有级别的violations
+      - INFO/MINOR/MAJOR/BLOCKER/CRITICAL/UNKNOWN：返回指定级别的violations
+      - is_appealed：返回已申诉的violations（不限级别）
+    - `include_appealed`: 是否包含已申诉的violations
+      - false（默认）：只返回未申诉的violations
+      - true：包含已申诉的violations
+      - 注意：当severity_level="is_appealed"时，此参数无效
+    - `status`: 任务状态过滤（可选）
+    - `page`, `size`: 分页参数
+    
+    **使用示例**：
+    - `?job_id=xxx`: 查询所有未申诉的violations
+    - `?job_id=xxx&include_appealed=true`: 查询所有violations（包括已申诉）
+    - `?job_id=xxx&severity_level=MAJOR`: 查询所有未申诉的MAJOR级别violations
+    - `?job_id=xxx&severity_level=MAJOR&include_appealed=true`: 查询所有MAJOR级别violations（包括已申诉）
+    - `?job_id=xxx&severity_level=is_appealed`: 查询所有已申诉的violations
+    
+    **返回结构**：
+    每个task包含matched_violations数组，包含符合条件的violations详细信息：
+    - violation_id: 违规项ID（可用于申诉操作）
+    - is_appealed: 是否已申诉
+    - rule_code, severity_level, line_no, description等完整信息
+    """
+    try:
+        page, size = pagination
+        api_logger.info(
+            f"按Severity Level查询任务列表(V2): Job={job_id}, Level={severity_level}, "
+            f"include_appealed={include_appealed}, 页码={page}, 大小={size}"
+        )
+        
+        # 调用业务服务查询任务列表
+        result = await task_service.get_tasks_by_severity_level_v2(
+            job_id=job_id,
+            severity_level=severity_level,
+            include_appealed=include_appealed,
+            page=page,
+            size=size,
+            status=status_filter
+        )
+        
+        api_logger.debug(f"按Severity Level查询任务成功(V2): {job_id}, 总数={result.tasks.total}")
+        return result
+        
+    except Exception as e:
+        api_logger.error(
+            f"按Severity Level查询任务失败(V2): {job_id}, Level={severity_level}, 错误: {e}"
+        )
+        raise handle_service_exception(e, "按Severity Level查询任务列表(V2)")
 
 
 @router.post("/tasks/calculate-severity-statistics", response_model=TaskSeverityCalculateResponse)

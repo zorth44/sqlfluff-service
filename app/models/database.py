@@ -564,6 +564,12 @@ class LintingViolation(Base):
         comment="是否可自动修复"
     )
     
+    is_appealed = Column(
+        Boolean,
+        default=False,
+        comment="是否被申诉：0-未申诉，1-已申诉"
+    )
+    
     # 时间戳
     created_at = Column(
         DateTime(6),
@@ -596,5 +602,6 @@ class LintingViolation(Base):
             'description': self.description,
             'sql_line': self.sql_line,
             'fixable': self.fixable,
+            'is_appealed': self.is_appealed,
             'created_at': self.created_at
         } 

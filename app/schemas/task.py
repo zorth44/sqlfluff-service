@@ -151,6 +151,8 @@ class TaskResultContent(BaseModel):
 
 class TaskViolationWithSQL(BaseModel):
     """带SQL行内容的违规项模型"""
+    violation_id: int = Field(description="违规项ID（linting_violations表的主键）")
+    is_appealed: bool = Field(description="是否被申诉")
     line_no: int = Field(description="违规行号")
     line_pos: int = Field(description="违规位置")
     code: str = Field(description="违规代码")
@@ -165,6 +167,8 @@ class TaskViolationWithSQL(BaseModel):
     class Config:
         schema_extra = {
             "example": {
+                "violation_id": 12345,
+                "is_appealed": False,
                 "line_no": 8,
                 "line_pos": 8,
                 "code": "RF02",
@@ -383,6 +387,7 @@ class SeverityLevelStatistics(BaseModel):
     BLOCKER: int = Field(default=0, description="BLOCKER级别违规项数量")
     CRITICAL: int = Field(default=0, description="CRITICAL级别违规项数量")
     UNKNOWN: int = Field(default=0, description="未知级别违规项数量")
+    appealed: int = Field(default=0, description="已申诉的违规项数量（所有级别）")
     
     class Config:
         schema_extra = {
@@ -392,7 +397,8 @@ class SeverityLevelStatistics(BaseModel):
                 "MAJOR": 12,
                 "BLOCKER": 2,
                 "CRITICAL": 1,
-                "UNKNOWN": 3
+                "UNKNOWN": 3,
+                "appealed": 5
             }
         }
 
@@ -418,5 +424,89 @@ class TaskSeverityCalculateResponse(BaseModel):
                         "reason": "结果文件不存在"
                     }
                 ]
+            }
+        }
+
+
+class TaskWithViolationsResponse(BaseModel):
+    """任务及其匹配的violations（用于V2接口）"""
+    task_id: str = Field(description="任务ID")
+    file_name: str = Field(description="文件名")
+    status: TaskStatusEnum = Field(description="任务状态")
+    result_file_path: Optional[str] = Field(default=None, description="结果文件路径")
+    error_message: Optional[str] = Field(default=None, description="错误消息")
+    created_at: datetime = Field(description="创建时间")
+    updated_at: datetime = Field(description="最后更新时间")
+    sql_lines: Optional[int] = Field(default=None, description="SQL文件行数")
+    total_violations: Optional[int] = Field(default=None, description="违规项总数")
+    critical_violations: Optional[int] = Field(default=None, description="严重违规项数")
+    
+    matched_violations: List[TaskViolationWithSQL] = Field(
+        description="符合筛选条件的violations列表"
+    )
+    matched_count: int = Field(
+        description="符合筛选条件的violations数量"
+    )
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
+        schema_extra = {
+            "example": {
+                "task_id": "task-e0e1f2e3-4f5f-6a6b-7c7d-8e8f9a9b0c0d",
+                "file_name": "query_users.sql",
+                "status": "SUCCESS",
+                "result_file_path": "jobs/job-xxx/results/task-xxx.json",
+                "created_at": "2025-06-27T09:30:01.123456",
+                "updated_at": "2025-06-27T09:30:15.654321",
+                "sql_lines": 25,
+                "total_violations": 5,
+                "critical_violations": 1,
+                "matched_violations": [
+                    {
+                        "violation_id": 12345,
+                        "is_appealed": False,
+                        "line_no": 8,
+                        "line_pos": 10,
+                        "code": "RF02",
+                        "description": "Unqualified reference found",
+                        "rule": "references.qualification",
+                        "severity": "warning",
+                        "severity_level": "MAJOR",
+                        "fixable": False,
+                        "sql_line": "SELECT product5.name FROM products product5",
+                        "support": ""
+                    }
+                ],
+                "matched_count": 1
+            }
+        }
+
+
+class TaskWithViolationsListResponse(BaseModel):
+    """任务列表响应（带violations，用于V2接口）"""
+    tasks: PaginationResponse[TaskWithViolationsResponse] = Field(description="任务列表（分页）")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "tasks": {
+                    "total": 50,
+                    "page": 1,
+                    "size": 10,
+                    "pages": 5,
+                    "has_next": True,
+                    "has_prev": False,
+                    "items": [
+                        {
+                            "task_id": "task-xxx",
+                            "file_name": "query_users.sql",
+                            "status": "SUCCESS",
+                            "matched_count": 2,
+                            "matched_violations": []
+                        }
+                    ]
+                }
             }
         } 

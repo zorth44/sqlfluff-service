@@ -12,12 +12,13 @@ from datetime import datetime, timedelta
 import os
 import json
 
-from app.models.database import LintingJob, LintingTask
+from app.models.database import LintingJob, LintingTask, LintingViolation
 from app.schemas.task import (
     TaskResponse, TaskDetailResponse, TaskResultContent,
     TaskStatusUpdateRequest, TaskStatistics, TaskFileInfo,
     TaskLintResultResponse, TaskViolationWithSQL, SeverityLevelStatistics,
-    TaskSeverityCalculateResponse
+    TaskSeverityCalculateResponse, TaskWithViolationsResponse,
+    TaskWithViolationsListResponse
 )
 from app.schemas.common import PaginationResponse, TaskStatusEnum
 from app.core.exceptions import TaskException, JobException, FileException, ErrorCode, DatabaseException
@@ -417,6 +418,8 @@ class TaskService:
             violations_with_sql = []
             for violation_record in violations_records:
                 violation_with_sql = TaskViolationWithSQL(
+                    violation_id=violation_record.id,  # 新增
+                    is_appealed=violation_record.is_appealed,  # 新增
                     line_no=violation_record.line_no or 0,
                     line_pos=violation_record.line_pos or 0,
                     code=violation_record.rule_code or '',
@@ -671,6 +674,86 @@ class TaskService:
             self.logger.error(f"获取Severity Level统计失败: {job_id}, {e}")
             raise TaskException(ErrorCode.TASK_QUERY_FAILED, "severity_statistics", str(e))
     
+    async def get_severity_level_statistics_v2(self, job_id: str) -> SeverityLevelStatistics:
+        """
+        获取指定Job下所有任务的Severity Level统计信息（V2版本 - 基于数据库查询）
+        
+        与V1版本的区别：
+        1. 直接查询linting_violations表，不读取JSON文件，性能更优
+        2. 统计时剔除is_appealed=1的violations（已申诉的违规项）
+        3. 新增appealed字段，统计所有已申诉的违规项数量
+        
+        Args:
+            job_id: Job ID
+            
+        Returns:
+            SeverityLevelStatistics: severity level统计信息，包含appealed字段
+        """
+        try:
+            self.logger.info(f"获取Job的Severity Level统计(V2): {job_id}")
+            
+            # 验证Job是否存在
+            job = self.db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+            if not job:
+                raise JobException(ErrorCode.JOB_NOT_FOUND, job_id, f"Job不存在: {job_id}")
+            
+            # 初始化统计计数器
+            statistics = {
+                "INFO": 0,
+                "MINOR": 0,
+                "MAJOR": 0,
+                "BLOCKER": 0,
+                "CRITICAL": 0,
+                "UNKNOWN": 0,
+                "appealed": 0
+            }
+            
+            # 统计未申诉的violations（按severity_level分组）
+            # 使用case处理NULL值，将NULL视为UNKNOWN
+            unappealed_stats = self.db.query(
+                func.coalesce(LintingViolation.severity_level, 'UNKNOWN').label('level'),
+                func.count(LintingViolation.id).label('count')
+            ).filter(
+                LintingViolation.job_id == job_id,
+                LintingViolation.is_appealed == False  # 剔除已申诉的
+            ).group_by(
+                func.coalesce(LintingViolation.severity_level, 'UNKNOWN')
+            ).all()
+            
+            # 填充未申诉的统计数据
+            for level, count in unappealed_stats:
+                if level in statistics:
+                    statistics[level] = count
+                else:
+                    # 对于未知的severity_level值，归类为UNKNOWN
+                    statistics["UNKNOWN"] += count
+            
+            # 统计已申诉的violations总数（所有级别）
+            appealed_count = self.db.query(
+                func.count(LintingViolation.id)
+            ).filter(
+                LintingViolation.job_id == job_id,
+                LintingViolation.is_appealed == True
+            ).scalar()
+            
+            statistics["appealed"] = appealed_count or 0
+            
+            result = SeverityLevelStatistics(**statistics)
+            
+            total_unappealed = sum([v for k, v in statistics.items() if k != "appealed"])
+            self.logger.info(
+                f"Severity Level统计完成(V2): {job_id}, "
+                f"未申诉违规项: {total_unappealed}, 已申诉违规项: {statistics['appealed']}"
+            )
+            
+            return result
+            
+        except JobException:
+            raise
+        except Exception as e:
+            self.logger.error(f"获取Severity Level统计失败(V2): {job_id}, {e}")
+            raise TaskException(ErrorCode.TASK_QUERY_FAILED, "severity_statistics_v2", str(e))
+    
     async def get_tasks_by_severity_level(
         self,
         job_id: str,
@@ -819,6 +902,188 @@ class TaskService:
         except Exception as e:
             self.logger.error(f"按Severity Level查询任务失败: {job_id}, {e}")
             raise TaskException(ErrorCode.TASK_QUERY_FAILED, "severity_level_filter", str(e))
+    
+    async def get_tasks_by_severity_level_v2(
+        self,
+        job_id: str,
+        severity_level: Optional[str] = None,
+        include_appealed: bool = False,
+        page: int = 1,
+        size: int = 10,
+        status: Optional[TaskStatusEnum] = None
+    ) -> TaskWithViolationsListResponse:
+        """
+        获取指定Job的任务列表及其violations（V2版本 - 基于数据库查询）
+        
+        与V1版本的区别：
+        1. 直接查询linting_violations表，不读取JSON文件
+        2. 支持severity_level为可选参数，不传则返回所有级别
+        3. 支持severity_level="is_appealed"，查询已申诉的violations
+        4. 支持include_appealed参数，控制是否包含已申诉的violations
+        5. 返回每个task的matched_violations详细信息，包含violation_id和is_appealed
+        
+        Args:
+            job_id: Job ID
+            severity_level: Severity Level过滤（可选）：
+                          - INFO/MINOR/MAJOR/BLOCKER/CRITICAL/UNKNOWN：查询指定级别的violations
+                          - "is_appealed"：查询已申诉的violations（忽略include_appealed参数）
+                          - None：查询所有级别的violations
+            include_appealed: 是否包含已申诉的violations（仅当severity_level不为"is_appealed"时有效）
+            page: 页码
+            size: 每页数量
+            status: 任务状态过滤（可选）
+            
+        Returns:
+            TaskWithViolationsListResponse: 任务列表及其violations
+        """
+        try:
+            self.logger.info(
+                f"获取任务列表(V2): job_id={job_id}, severity_level={severity_level}, "
+                f"include_appealed={include_appealed}, page={page}, size={size}"
+            )
+            
+            # 验证Job是否存在
+            job = self.db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+            if not job:
+                raise JobException(ErrorCode.JOB_NOT_FOUND, job_id, f"Job不存在: {job_id}")
+            
+            # 验证severity_level参数（如果提供）
+            if severity_level is not None:
+                valid_levels = {"INFO", "MINOR", "MAJOR", "BLOCKER", "CRITICAL", "UNKNOWN", "is_appealed"}
+                if severity_level not in valid_levels:
+                    raise TaskException(
+                        ErrorCode.TASK_QUERY_FAILED,
+                        "severity_level_filter",
+                        f"无效的severity_level: {severity_level}, 必须是: {', '.join(valid_levels)}"
+                    )
+            
+            # 构建基础任务查询
+            task_query = self.db.query(LintingTask).filter(
+                LintingTask.job_id == job_id
+            )
+            
+            # 添加状态过滤
+            if status:
+                task_query = task_query.filter(LintingTask.status == status)
+            
+            # 构建violation查询条件
+            violation_filters = [LintingViolation.job_id == job_id]
+            
+            # 根据severity_level参数构建过滤条件
+            if severity_level == "is_appealed":
+                # 查询已申诉的violations（不限级别）
+                violation_filters.append(LintingViolation.is_appealed == True)
+            elif severity_level is not None:
+                # 查询指定级别的violations
+                # 处理UNKNOWN级别（NULL值）
+                if severity_level == "UNKNOWN":
+                    violation_filters.append(
+                        or_(
+                            LintingViolation.severity_level.is_(None),
+                            LintingViolation.severity_level == "UNKNOWN"
+                        )
+                    )
+                else:
+                    violation_filters.append(LintingViolation.severity_level == severity_level)
+                
+                # 根据include_appealed参数决定是否过滤已申诉项
+                if not include_appealed:
+                    violation_filters.append(LintingViolation.is_appealed == False)
+            else:
+                # severity_level为None，查询所有级别
+                # 根据include_appealed参数决定是否过滤已申诉项
+                if not include_appealed:
+                    violation_filters.append(LintingViolation.is_appealed == False)
+            
+            # 查询符合条件的task_id列表（去重）
+            matching_task_ids = self.db.query(LintingViolation.task_id).filter(
+                and_(*violation_filters)
+            ).distinct().subquery()
+            
+            # 获取匹配的任务
+            matching_tasks_query = task_query.filter(
+                LintingTask.task_id.in_(matching_task_ids)
+            ).order_by(LintingTask.created_at.desc())
+            
+            # 计算总数
+            total = matching_tasks_query.count()
+            total_pages = (total + size - 1) // size if total > 0 else 1
+            
+            # 分页查询
+            tasks = matching_tasks_query.offset((page - 1) * size).limit(size).all()
+            
+            # 为每个任务获取匹配的violations
+            task_responses = []
+            for task in tasks:
+                # 查询该任务下符合条件的violations
+                violations_query = self.db.query(LintingViolation).filter(
+                    LintingViolation.task_id == task.task_id,
+                    *violation_filters
+                )
+                violations = violations_query.all()
+                
+                # 转换violations为TaskViolationWithSQL
+                # 注意字段映射：rule_code → code, rule_name → rule
+                violation_details = []
+                for violation in violations:
+                    violation_detail = TaskViolationWithSQL(
+                        violation_id=violation.id,
+                        is_appealed=violation.is_appealed,
+                        line_no=violation.line_no or 0,
+                        line_pos=violation.line_pos or 0,
+                        code=violation.rule_code or '',  # rule_code → code
+                        description=violation.description or '',
+                        rule=violation.rule_name or '',  # rule_name → rule
+                        severity=violation.severity or '',
+                        severity_level=violation.severity_level,
+                        fixable=violation.fixable or False,
+                        sql_line=violation.sql_line or '',
+                        support=""  # 数据库中没有这个字段
+                    )
+                    violation_details.append(violation_detail)
+                
+                # 构建任务响应
+                task_response = TaskWithViolationsResponse(
+                    task_id=task.task_id,
+                    file_name=task.file_name,
+                    status=task.status,
+                    result_file_path=task.result_file_path,
+                    error_message=task.error_message,
+                    created_at=task.created_at,
+                    updated_at=task.updated_at,
+                    sql_lines=task.sql_lines,
+                    total_violations=task.total_violations,
+                    critical_violations=task.critical_violations,
+                    matched_violations=violation_details,
+                    matched_count=len(violation_details)
+                )
+                task_responses.append(task_response)
+            
+            # 构造分页响应
+            pagination_response = PaginationResponse(
+                total=total,
+                page=page,
+                size=size,
+                pages=total_pages,
+                has_next=page < total_pages,
+                has_prev=page > 1,
+                items=task_responses
+            )
+            
+            result = TaskWithViolationsListResponse(tasks=pagination_response)
+            
+            self.logger.info(
+                f"任务列表查询完成(V2): {job_id}, 总任务数: {total}, "
+                f"当前页任务数: {len(task_responses)}"
+            )
+            
+            return result
+            
+        except (JobException, TaskException):
+            raise
+        except Exception as e:
+            self.logger.error(f"查询任务列表失败(V2): {job_id}, {e}")
+            raise TaskException(ErrorCode.TASK_QUERY_FAILED, "tasks_by_severity_v2", str(e))
     
     async def batch_calculate_all_severity_statistics(self) -> TaskSeverityCalculateResponse:
         """
