@@ -429,7 +429,7 @@ class TaskService:
                     severity_level=violation_record.severity_level,
                     fixable=violation_record.fixable or False,
                     sql_line=violation_record.sql_line or '',  # 直接从数据库读取
-                    support=""  # 数据库中没有这个字段，设置为空字符串
+                    support=violation_record.support or ''  # 从数据库读取support字段
                 )
                 violations_with_sql.append(violation_with_sql)
             
@@ -1038,7 +1038,7 @@ class TaskService:
                         severity_level=violation.severity_level,
                         fixable=violation.fixable or False,
                         sql_line=violation.sql_line or '',
-                        support=""  # 数据库中没有这个字段
+                        support=violation.support or ''  # 从数据库读取support字段
                     )
                     violation_details.append(violation_detail)
                 

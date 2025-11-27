@@ -557,6 +557,7 @@ def process_sql_file(self, task_id: str):
                             'description': v.get('description'),
                             'sql_line': sql_line,  # 从源文件读取的SQL行内容
                             'fixable': v.get('fixable', False),
+                            'support': v.get('support', ''),  # 规则支持信息
                         })
                     
                     # 批量插入（性能优化）

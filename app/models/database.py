@@ -570,6 +570,12 @@ class LintingViolation(Base):
         comment="是否被申诉：0-未申诉，1-已申诉"
     )
     
+    support = Column(
+        Text,
+        nullable=True,
+        comment="规则支持信息，描述对应violation如何解决的信息（来自修改后的SQLFluff）"
+    )
+    
     # 时间戳
     created_at = Column(
         DateTime(6),
@@ -603,5 +609,6 @@ class LintingViolation(Base):
             'sql_line': self.sql_line,
             'fixable': self.fixable,
             'is_appealed': self.is_appealed,
+            'support': self.support,
             'created_at': self.created_at
         } 
