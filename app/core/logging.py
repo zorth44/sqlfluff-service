@@ -170,12 +170,34 @@ def setup_logging() -> None:
     console_handler.addFilter(context_filter)
     root_logger.addHandler(console_handler)
     
-    # 文件处理器（如果配置了）
+    # 文件处理器（如果配置了）- 使用按日期轮转的处理器
     if settings.LOG_FILE_PATH:
-        file_handler = logging.FileHandler(settings.LOG_FILE_PATH)
-        file_handler.setFormatter(JSONFormatter())
-        file_handler.addFilter(context_filter)
-        root_logger.addHandler(file_handler)
+        try:
+            # 创建日志目录（如果不存在）
+            log_file_path = Path(settings.LOG_FILE_PATH)
+            log_file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # 使用 TimedRotatingFileHandler 实现按日期轮转
+            # when='midnight' 表示每天午夜轮转
+            # backupCount 控制保留的历史日志文件数量
+            file_handler = logging.handlers.TimedRotatingFileHandler(
+                filename=settings.LOG_FILE_PATH,
+                when='midnight',  # 每天午夜轮转
+                interval=1,  # 轮转间隔（天）
+                backupCount=settings.LOG_FILE_BACKUP_COUNT,  # 保留的历史文件数量
+                encoding='utf-8',
+                delay=False,  # 不延迟打开文件
+                utc=False  # 使用本地时间
+            )
+            file_handler.setFormatter(JSONFormatter())
+            file_handler.addFilter(context_filter)
+            root_logger.addHandler(file_handler)
+        except Exception as e:
+            # 如果文件日志设置失败，记录警告但不影响程序运行
+            logging.getLogger(__name__).warning(
+                f"文件日志设置失败: {e}",
+                extra={'extra_data': {'error': str(e)}}
+            )
     
     # 设置第三方库日志级别
     logging.getLogger("uvicorn").setLevel(logging.INFO)
