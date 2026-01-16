@@ -10,11 +10,14 @@ Celery任务定义
 
 import os
 import tempfile
+import threading
 import redis
 from contextlib import contextmanager
 from celery import current_task
+from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy import func
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from app.celery_app.celery_main import celery_app
 from app.core.database import SessionLocal
@@ -49,7 +52,7 @@ def task_lock(task_id: str, timeout: int = 300):
     
     try:
         if lock.acquire(blocking=False):
-            yield
+            yield lock
         else:
             raise Exception(f"Task {task_id} is already being processed")
     finally:
@@ -57,6 +60,66 @@ def task_lock(task_id: str, timeout: int = 300):
             lock.release()
         except:
             pass
+
+
+def _touch_task_updated_at(task_id: str) -> None:
+    """定期刷新task的updated_at，避免长任务看起来卡住"""
+    db = SessionLocal()
+    try:
+        db.query(LintingTask).filter(LintingTask.task_id == task_id).update(
+            {"updated_at": func.now()}
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        service_logger.warning(f"Failed to touch updated_at for task {task_id}: {e}")
+    finally:
+        db.close()
+
+
+def _mark_task_failed(task_id: str, error_message: str) -> None:
+    """更新任务为失败状态并刷新父Job"""
+    db = SessionLocal()
+    try:
+        task = db.query(LintingTask).filter(LintingTask.task_id == task_id).first()
+        if task:
+            task.status = TaskStatusEnum.FAILURE
+            task.error_message = error_message
+            db.commit()
+            update_job_status_based_on_tasks(task.job_id, db)
+    except Exception as update_error:
+        db.rollback()
+        service_logger.error(f"Failed to update task status after error: {update_error}")
+    finally:
+        db.close()
+
+
+@contextmanager
+def task_heartbeat(
+    task_id: str,
+    interval_seconds: int = 60,
+    lock: Optional[redis.lock.Lock] = None,
+    lock_extend_seconds: int = 300
+):
+    """后台心跳，定期刷新updated_at并延长分布式锁"""
+    stop_event = threading.Event()
+
+    def _beat():
+        while not stop_event.wait(interval_seconds):
+            _touch_task_updated_at(task_id)
+            if lock:
+                try:
+                    lock.extend(lock_extend_seconds)
+                except Exception as e:
+                    service_logger.warning(f"Failed to extend lock for task {task_id}: {e}")
+
+    thread = threading.Thread(target=_beat, name=f"task-heartbeat-{task_id}", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop_event.set()
+        thread.join(timeout=interval_seconds + 5)
 
 
 def update_job_status_based_on_tasks(job_id: str, db: Session):
@@ -399,7 +462,7 @@ def process_sql_file(self, task_id: str):
     """
     db = SessionLocal()
     try:
-        with task_lock(f"process_sql_{task_id}"):
+        with task_lock(f"process_sql_{task_id}") as lock:
             service_logger.info(f"Starting SQL file processing for task: {task_id}")
             
             # 获取任务信息
@@ -416,66 +479,67 @@ def process_sql_file(self, task_id: str):
             task.status = TaskStatusEnum.IN_PROGRESS
             db.commit()
             
-            service_logger.info(f"Processing SQL file for task {task_id}: {task.source_file_path}")
-            
-            # 初始化文件管理器
-            file_manager = FileManager()
-            
-            # 获取SQL文件完整路径
-            sql_file_path = file_manager.get_absolute_path(task.source_file_path)
-            
-            if not sql_file_path.exists():
-                raise FileException("process_sql_file", str(sql_file_path), "SQL file not found")
-            
-            # 检查是否为有效的SQL文件（防止处理系统隐藏文件）
-            if not file_manager._is_valid_sql_file(sql_file_path):
-                error_msg = f"跳过无效的SQL文件: {task.source_file_path}"
-                service_logger.warning(error_msg)
-                # 将Task标记为失败，但不影响Job状态
-                task.status = TaskStatusEnum.FAILURE
-                task.error_message = error_msg
-                db.commit()
-                return {
-                    "status": "skipped",
-                    "task_id": task_id,
-                    "job_id": task.job_id,
-                    "message": error_msg
-                }
-            
-            # 计算SQL文件行数（支持多种编码）
-            try:
-                line_count = None
-                # 尝试多种编码格式
-                encodings = ['utf-8', 'utf-8-sig', 'gbk', 'gb2312', 'latin-1', 'cp1252']
-                for encoding in encodings:
-                    try:
-                        with open(sql_file_path, 'r', encoding=encoding) as f:
-                            line_count = sum(1 for line in f)
-                        service_logger.info(f"SQL file {task.source_file_path} has {line_count} lines (encoding: {encoding})")
-                        break
-                    except UnicodeDecodeError:
-                        continue
+            with task_heartbeat(task_id, lock=lock):
+                service_logger.info(f"Processing SQL file for task {task_id}: {task.source_file_path}")
                 
-                if line_count is not None:
-                    task.sql_lines = line_count
-                else:
-                    # 如果所有编码都失败，尝试使用errors='replace'
-                    try:
-                        with open(sql_file_path, 'r', encoding='utf-8', errors='replace') as f:
-                            line_count = sum(1 for line in f)
+                # 初始化文件管理器
+                file_manager = FileManager()
+                
+                # 获取SQL文件完整路径
+                sql_file_path = file_manager.get_absolute_path(task.source_file_path)
+                
+                if not sql_file_path.exists():
+                    raise FileException("process_sql_file", str(sql_file_path), "SQL file not found")
+                
+                # 检查是否为有效的SQL文件（防止处理系统隐藏文件）
+                if not file_manager._is_valid_sql_file(sql_file_path):
+                    error_msg = f"跳过无效的SQL文件: {task.source_file_path}"
+                    service_logger.warning(error_msg)
+                    # 将Task标记为失败，但不影响Job状态
+                    task.status = TaskStatusEnum.FAILURE
+                    task.error_message = error_msg
+                    db.commit()
+                    return {
+                        "status": "skipped",
+                        "task_id": task_id,
+                        "job_id": task.job_id,
+                        "message": error_msg
+                    }
+                
+                # 计算SQL文件行数（支持多种编码）
+                try:
+                    line_count = None
+                    # 尝试多种编码格式
+                    encodings = ['utf-8', 'utf-8-sig', 'gbk', 'gb2312', 'latin-1', 'cp1252']
+                    for encoding in encodings:
+                        try:
+                            with open(sql_file_path, 'r', encoding=encoding) as f:
+                                line_count = sum(1 for line in f)
+                            service_logger.info(f"SQL file {task.source_file_path} has {line_count} lines (encoding: {encoding})")
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    
+                    if line_count is not None:
                         task.sql_lines = line_count
-                        service_logger.warning(f"SQL file {task.source_file_path} 使用UTF-8替换模式读取，{line_count} 行")
-                    except Exception:
-                        task.sql_lines = None
-            except Exception as e:
-                service_logger.warning(f"Failed to count lines in SQL file {task.source_file_path}: {e}")
-                task.sql_lines = None
-            
-            # 使用SQLFluff分析SQL文件
-            sqlfluff_service = SQLFluffService()
-            service_logger.info(f"Analyzing SQL file with SQLFluff: {sql_file_path}, dialect: {job.dialect}, rules: {job.rules}")
-            # 传递相对路径、方言和规则给SQLFluffService，并传递数据库会话用于规则分级映射
-            analysis_result = sqlfluff_service.analyze_sql_file(task.source_file_path, job.dialect, job.rules, db)
+                    else:
+                        # 如果所有编码都失败，尝试使用errors='replace'
+                        try:
+                            with open(sql_file_path, 'r', encoding='utf-8', errors='replace') as f:
+                                line_count = sum(1 for line in f)
+                            task.sql_lines = line_count
+                            service_logger.warning(f"SQL file {task.source_file_path} 使用UTF-8替换模式读取，{line_count} 行")
+                        except Exception:
+                            task.sql_lines = None
+                except Exception as e:
+                    service_logger.warning(f"Failed to count lines in SQL file {task.source_file_path}: {e}")
+                    task.sql_lines = None
+                
+                # 使用SQLFluff分析SQL文件
+                sqlfluff_service = SQLFluffService()
+                service_logger.info(f"Analyzing SQL file with SQLFluff: {sql_file_path}, dialect: {job.dialect}, rules: {job.rules}")
+                # 传递相对路径、方言和规则给SQLFluffService，并传递数据库会话用于规则分级映射
+                analysis_result = sqlfluff_service.analyze_sql_file(task.source_file_path, job.dialect, job.rules, db)
 
             # 规则分级后处理：写入 severity_level（不影响原有 severity 字段）
             try:
@@ -613,23 +677,15 @@ def process_sql_file(self, task_id: str):
                 "violations_count": total_violations
             }
             
+    except SoftTimeLimitExceeded as e:
+        service_logger.error(f"Soft time limit exceeded for task {task_id}: {e}")
+        db.rollback()
+        _mark_task_failed(task_id, f"Soft time limit exceeded: {e}")
+        raise
     except Exception as e:
         service_logger.error(f"Failed to process SQL file for task {task_id}: {e}")
         db.rollback()
-        
-        try:
-            task = db.query(LintingTask).filter(LintingTask.task_id == task_id).first()
-            if task:
-                # 更新任务状态为FAILURE
-                task.status = TaskStatusEnum.FAILURE
-                task.error_message = str(e)
-                db.commit()
-                
-                # 检查并更新父Job状态
-                update_job_status_based_on_tasks(task.job_id, db)
-                
-        except Exception as update_error:
-            service_logger.error(f"Failed to update task status after error: {update_error}")
+        _mark_task_failed(task_id, str(e))
         
         # 重试机制
         if self.request.retries < self.max_retries:

@@ -50,6 +50,7 @@ base_config = {
     
     # 任务确认和重试
     'task_acks_late': True,
+    'task_reject_on_worker_lost': settings.CELERY_TASK_REJECT_ON_WORKER_LOST,
     'worker_prefetch_multiplier': 1,
     'task_max_retries': 3,
     'task_default_retry_delay': 60,
