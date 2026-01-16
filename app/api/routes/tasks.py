@@ -559,6 +559,84 @@ async def get_tasks_by_severity_level_v2(
         raise handle_service_exception(e, "按Severity Level查询任务列表(V2)")
 
 
+@router.get("/tasks/by-severity-level/v3", response_model=TaskWithViolationsListResponse)
+async def get_tasks_by_severity_level_v3(
+    job_id: str = Query(..., description="Job ID（必填）"),
+    severity_level: Optional[List[str]] = Query(
+        None,
+        description="Severity Level过滤（可选，支持多值）：INFO/MINOR/MAJOR/BLOCKER/CRITICAL/UNKNOWN/is_appealed。使用重复参数形式传多个值：?severity_level=MAJOR&severity_level=CRITICAL。不传则返回所有级别"
+    ),
+    include_appealed: bool = Query(
+        False,
+        description="是否包含已申诉的violations（默认false，仅当severity_level不包含is_appealed时有效）"
+    ),
+    pagination: tuple[int, int] = Depends(get_pagination_params),
+    status_filter: Optional[TaskStatusEnum] = Query(None, alias="status", description="任务状态过滤"),
+    task_service: TaskService = Depends(get_task_service)
+):
+    """
+    按Severity Level获取任务列表及violations详情（V3版本 - 支持多值severity_level过滤，推荐使用）
+    
+    **与V2版本的区别**：
+    1. 支持多个severity_level值同时过滤（使用重复参数形式）
+    2. 其他功能与V2相同
+    
+    **参数说明**：
+    - `job_id`: Job ID（必填）
+    - `severity_level`: Severity Level过滤（可选，支持多值）
+      - 不传：返回所有级别的violations
+      - 单个值：`?severity_level=MAJOR` - 返回指定级别的violations
+      - 多个值：`?severity_level=MAJOR&severity_level=CRITICAL&severity_level=BLOCKER` - 返回多个级别的violations
+      - `is_appealed`：返回已申诉的violations（不能与其他级别混用）
+    - `include_appealed`: 是否包含已申诉的violations
+      - false（默认）：只返回未申诉的violations
+      - true：包含已申诉的violations
+      - 注意：当severity_level包含"is_appealed"时，此参数无效
+    - `status`: 任务状态过滤（可选）
+    - `page`, `size`: 分页参数
+    
+    **使用示例**：
+    - `?job_id=xxx`: 查询所有未申诉的violations
+    - `?job_id=xxx&include_appealed=true`: 查询所有violations（包括已申诉）
+    - `?job_id=xxx&severity_level=MAJOR`: 查询所有未申诉的MAJOR级别violations
+    - `?job_id=xxx&severity_level=MAJOR&severity_level=CRITICAL`: 查询所有未申诉的MAJOR和CRITICAL级别violations
+    - `?job_id=xxx&severity_level=MAJOR&severity_level=CRITICAL&include_appealed=true`: 查询所有MAJOR和CRITICAL级别violations（包括已申诉）
+    - `?job_id=xxx&severity_level=is_appealed`: 查询所有已申诉的violations
+    - `?job_id=xxx&severity_level=MAJOR&severity_level=UNKNOWN`: 查询MAJOR和UNKNOWN级别violations
+    
+    **返回结构**：
+    每个task包含matched_violations数组，包含符合条件的violations详细信息：
+    - violation_id: 违规项ID（可用于申诉操作）
+    - is_appealed: 是否已申诉
+    - rule_code, severity_level, line_no, description等完整信息
+    """
+    try:
+        page, size = pagination
+        api_logger.info(
+            f"按Severity Level查询任务列表(V3): Job={job_id}, Levels={severity_level}, "
+            f"include_appealed={include_appealed}, 页码={page}, 大小={size}"
+        )
+        
+        # 调用业务服务查询任务列表
+        result = await task_service.get_tasks_by_severity_level_v3(
+            job_id=job_id,
+            severity_levels=severity_level,
+            include_appealed=include_appealed,
+            page=page,
+            size=size,
+            status=status_filter
+        )
+        
+        api_logger.debug(f"按Severity Level查询任务成功(V3): {job_id}, 总数={result.tasks.total}")
+        return result
+        
+    except Exception as e:
+        api_logger.error(
+            f"按Severity Level查询任务失败(V3): {job_id}, Levels={severity_level}, 错误: {e}"
+        )
+        raise handle_service_exception(e, "按Severity Level查询任务列表(V3)")
+
+
 @router.post("/tasks/calculate-severity-statistics", response_model=TaskSeverityCalculateResponse)
 async def calculate_all_severity_statistics(
     task_service: TaskService = Depends(get_task_service)
