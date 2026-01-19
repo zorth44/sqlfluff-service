@@ -31,10 +31,13 @@ fi
 
 # 启动Web服务
 cd "$CURRENT_DIR"
-LOG_FILE="$LOG_DIR/web_$(date +%Y%m%d).log"
+
+# 使用应用内日志轮转：固定文件名 + 按日轮转
+export LOG_FILE_PATH="$LOG_DIR/web.log"
+export LOG_FILE_BACKUP_COUNT=7
 
 echo "启动Web服务..."
-echo "日志文件: $LOG_FILE"
+echo "日志文件: $LOG_FILE_PATH"
 
 # 设置Python路径
 export PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}."
@@ -49,13 +52,13 @@ if [ "${ENVIRONMENT:-development}" = "production" ]; then
         --access-logfile - \
         --error-logfile - \
         --timeout 120 \
-        >> "$LOG_FILE" 2>&1 &
+        > /dev/null 2>&1 &
 else
     # 开发环境使用Uvicorn
     nohup uvicorn app.web_main:app \
         --host "0.0.0.0" \
         --port "${PORT:-8000}" \
-        >> "$LOG_FILE" 2>&1 &
+        > /dev/null 2>&1 &
 fi
 
 WEB_PID=$!

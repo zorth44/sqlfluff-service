@@ -31,10 +31,13 @@ fi
 
 # 启动Worker服务
 cd "$CURRENT_DIR"
-LOG_FILE="$LOG_DIR/worker_$(date +%Y%m%d).log"
+
+# 使用应用内日志轮转：固定文件名 + 按日轮转
+export LOG_FILE_PATH="$LOG_DIR/worker.log"
+export LOG_FILE_BACKUP_COUNT=7
 
 echo "启动Worker服务..."
-echo "日志文件: $LOG_FILE"
+echo "日志文件: $LOG_FILE_PATH"
 
 # 设置Python路径
 export PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}."
@@ -47,7 +50,7 @@ nohup celery -A app.celery_app.celery_main:celery_app worker \
     --max-tasks-per-child=1000 \
     --prefetch-multiplier=1 \
     --queues="${CELERY_QUEUES:-default,sql_analysis,zip_processing}" \
-    >> "$LOG_FILE" 2>&1 &
+    > /dev/null 2>&1 &
 
 WORKER_PID=$!
 echo $WORKER_PID > "$WORKER_PID_FILE"
