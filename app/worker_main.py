@@ -1,65 +1,37 @@
 """
-Celery Worker服务启动入口
+DB-as-Queue Worker 启动入口
 
-这是Celery Worker服务的主要入口点，负责：
-- 创建Celery应用实例
-- 配置任务队列和消息代理
-- 启动Worker进程
-- 处理异步任务
+启动基于数据库任务队列的 Worker 进程。
+Worker 通过 SELECT ... FOR UPDATE SKIP LOCKED 原子领取任务，
+不再依赖 Celery 或 Redis。
 """
 
 import os
 import sys
-from app.celery_app.celery_main import celery_app
 from app.config.settings import get_settings
 from app.core.logging import setup_logging
-
-settings = get_settings()
+from app.worker.config import WorkerConfig
+from app.worker.loop import start_worker
 
 
 def main():
     """Worker主启动函数"""
     # 设置日志
     setup_logging()
-    
-    # Redis集群模式：设置环境变量禁用 mingle
-    if settings.REDIS_CLUSTER_ENABLED:
-        os.environ['CELERY_WORKER_DIRECT'] = 'true'
-        os.environ['CELERY_DISABLE_RATE_LIMITS'] = 'true'
-        print("[Worker] 设置集群兼容环境变量")
-    
-    # 设置Worker参数
-    worker_args = [
-        'worker',
-        '--loglevel=INFO',
-        f'--concurrency={settings.CELERY_WORKER_CONCURRENCY}',
-        '--prefetch-multiplier=1',
-        '--max-tasks-per-child=1000',
-        f'--hostname=worker@{os.getenv("HOSTNAME", "localhost")}',
-    ]
-    
-    # Redis集群模式：禁用会导致跨槽错误的功能
-    if settings.REDIS_CLUSTER_ENABLED:
-        worker_args.extend([
-            '--without-mingle',     # 禁用 worker 握手
-            '--without-gossip',     # 禁用 gossip 协议
-            '--without-heartbeat',  # 禁用心跳
-        ])
-        print("[Worker] Redis集群模式：已禁用 mingle, gossip, heartbeat")
-    
-    # 如果指定了队列，则只处理特定队列
-    worker_queues = os.getenv('CELERY_WORKER_QUEUES')
-    if worker_queues:
-        worker_args.extend(['--queues', worker_queues])
-    
-    # 启动Worker
-    print(f"Starting Celery Worker with args: {' '.join(worker_args)}")
-    celery_app.worker_main(worker_args)
 
+    # 加载配置
+    settings = get_settings()
+    config = WorkerConfig()
 
-def create_celery_app():
-    """创建Celery应用实例"""
-    return celery_app
+    print(f"Starting DB-as-Queue Worker...")
+    print(f"  Worker Concurrency: {config.concurrency}")
+    print(f"  Poll Interval: {config.poll_interval}s")
+    print(f"  Heartbeat Interval: {config.heartbeat_interval}s")
+    print(f"  Zombie Timeout: {config.zombie_timeout}s")
+    print(f"  Max Retries: {config.max_retries}")
+
+    # 启动 DB Worker
+    start_worker(config)
 
 
 if __name__ == "__main__":

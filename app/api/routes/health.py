@@ -8,7 +8,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-import redis
 import os
 from typing import Dict, Any
 from datetime import datetime
@@ -54,22 +53,41 @@ async def health_check(db: Session = Depends(get_db)):
         }
         health_status["status"] = "unhealthy"
     
-    # Redis检查
+    # Worker状态检查
     try:
-        logger.debug("检查Redis连接")
-        redis_client = redis.Redis.from_url(settings.CELERY_BROKER_URL)
-        redis_client.ping()
-        health_status["checks"]["redis"] = {
-            "status": "healthy",
-            "message": "Redis连接正常",
+        logger.debug("检查Worker状态")
+        from app.models.database import WorkerRegistry
+        from datetime import datetime, timedelta
+        cutoff = datetime.utcnow() - timedelta(seconds=60)
+        active_workers = db.query(WorkerRegistry).filter(
+            WorkerRegistry.status == 'RUNNING',
+            WorkerRegistry.heartbeat_at >= cutoff
+        ).all()
+
+        worker_info = [
+            {
+                "worker_id": w.worker_id,
+                "hostname": w.hostname,
+                "current_tasks": w.current_task_count,
+                "last_heartbeat": w.heartbeat_at.isoformat()
+            }
+            for w in active_workers
+        ]
+
+        health_status["checks"]["workers"] = {
+            "status": "healthy" if active_workers else "warning",
+            "message": f"{len(active_workers)} active worker(s)",
+            "workers": worker_info,
             "checked_at": datetime.utcnow().isoformat()
         }
-        logger.debug("Redis连接检查通过")
+        if not active_workers:
+            health_status["status"] = "warning"
+        logger.debug(f"Worker状态检查通过: {len(active_workers)} active")
     except Exception as e:
-        logger.error(f"Redis连接检查失败: {e}")
-        health_status["checks"]["redis"] = {
+        logger.error(f"Worker状态检查失败: {e}")
+        health_status["checks"]["workers"] = {
             "status": "unhealthy",
-            "message": f"Redis连接失败: {str(e)}",
+            "message": f"Worker状态检查失败: {str(e)}",
             "checked_at": datetime.utcnow().isoformat()
         }
         health_status["status"] = "unhealthy"
@@ -187,7 +205,6 @@ async def health_check(db: Session = Depends(get_db)):
         # 检查关键配置
         required_configs = [
             "DATABASE_URL",
-            "CELERY_BROKER_URL", 
             "NFS_SHARE_ROOT_PATH"
         ]
         
@@ -308,12 +325,6 @@ async def dependencies_status():
             "type": "database",
             "required": True,
             "description": "主数据库，存储Job和Task信息"
-        },
-        "redis": {
-            "name": "Redis消息队列",
-            "type": "cache/queue",
-            "required": True,
-            "description": "Celery消息代理，用于任务队列"
         },
         "nfs": {
             "name": "NFS共享存储",

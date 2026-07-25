@@ -21,21 +21,6 @@ services:
       timeout: 20s
       retries: 10
 
-  # Redis消息队列
-  redis:
-    image: redis:7-alpine
-    container_name: sqlfluff-redis
-    ports:
-      - "1:1"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
   # NFS共享存储（使用本地目录模拟）
   nfs-share:
     image: busybox:latest
@@ -52,22 +37,17 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=mysql+pymysql://sqlfluff_user:sqlfluff_password@mysql:3306/sqlfluff
-      - REDIS_HOST=redis
-      - REDIS_PORT=1
-      - REDIS_DB_BROKER=0
-      - REDIS_DB_RESULT=1
       - NFS_SHARE_ROOT_PATH=/mnt/nfs_share/sql_linting
       - ENVIRONMENT=production
       - PORT=8000
       - GUNICORN_WORKERS=4
       - CONSUL_HOST=consul
       - CONSUL_PORT=8500
+      - WORKER_CONCURRENCY=4
     volumes:
       - nfs_share:/mnt/nfs_share
     depends_on:
       mysql:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     command: ./scripts/start_web.sh
     healthcheck:
@@ -77,28 +57,24 @@ services:
       retries: 3
       start_period: 40s
 
-  # Worker服务
+  # Worker服务（DB-as-Queue）
   worker:
     build: .
     container_name: sqlfluff-worker
     environment:
       - DATABASE_URL=mysql+pymysql://sqlfluff_user:sqlfluff_password@mysql:3306/sqlfluff
-      - REDIS_HOST=redis
-      - REDIS_PORT=1
-      - REDIS_DB_BROKER=0
-      - REDIS_DB_RESULT=1
       - NFS_SHARE_ROOT_PATH=/mnt/nfs_share/sql_linting
-      - CELERY_WORKER_CONCURRENCY=4
-      - CELERY_LOG_LEVEL=INFO
-      - CELERY_QUEUES=default,sql_analysis,zip_processing
+      - WORKER_CONCURRENCY=4
+      - WORKER_POLL_INTERVAL=2.0
+      - WORKER_HEARTBEAT_INTERVAL=30
+      - WORKER_ZOMBIE_TIMEOUT=600
+      - WORKER_MAX_RETRIES=3
     volumes:
       - nfs_share:/mnt/nfs_share
     depends_on:
       mysql:
         condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: ./scripts/start_worker.sh
+    command: ./scripts/start_db_worker.sh
     deploy:
       replicas: 2
 
@@ -148,8 +124,6 @@ services:
 volumes:
   mysql_data:
     driver: local
-  redis_data:
-    driver: local
   nfs_share:
     driver: local
   prometheus_data:
@@ -159,4 +133,4 @@ volumes:
 
 networks:
   default:
-    name: sqlfluff-network 
+    name: sqlfluff-network

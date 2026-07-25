@@ -6,8 +6,7 @@ from app.core.database import Base, get_db
 from app.web_main import app
 import tempfile
 import os
-import redis
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 # 测试数据库
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
@@ -42,14 +41,6 @@ def client(db_session):
     app.dependency_overrides[get_db] = override_get_db
     test_client = TestClient(app)
     yield test_client
-
-@pytest.fixture
-def mock_redis():
-    """Mock Redis客户端"""
-    with patch('app.celery_app.tasks.redis_client') as mock_redis:
-        mock_redis.lock.return_value.__enter__ = MagicMock()
-        mock_redis.lock.return_value.__exit__ = MagicMock()
-        yield mock_redis
 
 @pytest.fixture
 def temp_nfs_dir():

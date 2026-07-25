@@ -210,7 +210,7 @@ class LintingTask(Base):
         unique=True,
         nullable=False,
         index=True,
-        comment="Celery任务的UUID"
+        comment="任务的UUID"
     )
     
     job_id = Column(
@@ -300,7 +300,34 @@ class LintingTask(Base):
         nullable=True,
         comment="UNKNOWN级别违规项数量"
     )
-    
+
+    # DB-as-Queue Worker 字段
+    priority = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="任务优先级，数值越大优先级越高"
+    )
+
+    claim_id = Column(
+        String(255),
+        nullable=True,
+        comment="Worker 领取标识（格式：worker_id:random_hex）"
+    )
+
+    claimed_at = Column(
+        DateTime(6),
+        nullable=True,
+        comment="任务被 Worker 领取的时间"
+    )
+
+    retry_count = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="已重试次数"
+    )
+
     # 时间戳字段
     created_at = Column(
         DateTime(6),
@@ -308,7 +335,7 @@ class LintingTask(Base):
         default=func.now(),
         comment="创建时间"
     )
-    
+
     updated_at = Column(
         DateTime(6),
         nullable=False,
@@ -316,7 +343,7 @@ class LintingTask(Base):
         onupdate=func.now(),
         comment="最后更新时间"
     )
-    
+
     # 关系定义
     job = relationship(
         "LintingJob",
@@ -352,10 +379,14 @@ class LintingTask(Base):
             'severity_blocker': self.severity_blocker,
             'severity_critical': self.severity_critical,
             'severity_unknown': self.severity_unknown,
+            'priority': self.priority,
+            'claim_id': self.claim_id,
+            'claimed_at': self.claimed_at,
+            'retry_count': self.retry_count,
             'created_at': self.created_at,
             'updated_at': self.updated_at
         }
-    
+
     @property
     def is_completed(self) -> bool:
         """检查任务是否已完成"""
@@ -475,6 +506,73 @@ class TaskQueryHelper:
         return session.query(LintingTask).filter(
             LintingTask.status == 'FAILURE'
         )
+
+
+class WorkerRegistry(Base):
+    """
+    Worker 注册表模型
+
+    记录所有 Worker 实例的心跳和状态信息，
+    用于僵尸检测和监控。
+    """
+    __tablename__ = "worker_registry"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="自增主键")
+    worker_id = Column(
+        String(255),
+        unique=True,
+        nullable=False,
+        index=True,
+        comment="Worker 唯一标识（hostname_pid）"
+    )
+    hostname = Column(
+        String(255),
+        nullable=False,
+        comment="Worker 所在主机名"
+    )
+    pid = Column(
+        Integer,
+        nullable=False,
+        comment="Worker 进程 ID"
+    )
+    status = Column(
+        Enum('RUNNING', 'STOPPED', 'DEAD', name='worker_status_enum'),
+        nullable=False,
+        default='RUNNING',
+        comment="Worker 运行状态"
+    )
+    heartbeat_at = Column(
+        DateTime(6),
+        nullable=False,
+        default=func.now(),
+        comment="最后心跳时间"
+    )
+    current_task_count = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="当前处理中的任务数"
+    )
+    total_tasks_processed = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="累计已完成任务数"
+    )
+    started_at = Column(
+        DateTime(6),
+        nullable=False,
+        default=func.now(),
+        comment="Worker 启动时间"
+    )
+    stopped_at = Column(
+        DateTime(6),
+        nullable=True,
+        comment="Worker 停止时间"
+    )
+
+    def __repr__(self):
+        return f"<WorkerRegistry(worker_id='{self.worker_id}', status='{self.status}')>"
 
 
 class LintingViolation(Base):

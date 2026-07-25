@@ -4,6 +4,8 @@ Job相关API路由
 实现核验工作(Job)相关的HTTP接口，包括创建、查询、状态管理等功能。
 """
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from typing import Optional, List
@@ -41,24 +43,10 @@ async def create_job(
     """
     try:
         api_logger.info(f"创建Job请求: {request.dict()}")
-        
+
         # 调用业务服务创建Job
         response = await job_service.create_job(request)
-        
-        # 派发Celery任务进行后台处理
-        try:
-            from app.celery_app.tasks import expand_zip_and_dispatch_tasks
-            
-            # 对于单SQL文件和ZIP包，都派发expand_zip_and_dispatch_tasks任务
-            # 该任务会根据Job类型进行相应的处理
-            task_result = expand_zip_and_dispatch_tasks.delay(response.job_id)
-            api_logger.info(f"派发任务处理: {task_result.id}")
-                
-        except Exception as e:
-            api_logger.error(f"任务派发失败: {e}")
-            # 注意：即使任务派发失败，Job已经创建，所以仍然返回成功
-            # 用户可以稍后重试或通过其他方式处理
-        
+
         api_logger.info(f"Job创建成功: {response.job_id}")
         return response
         
@@ -179,21 +167,7 @@ async def create_job_with_upload(
         
         # 调用业务服务创建Job
         response = await job_service.create_job(request)
-        
-        # 派发Celery任务进行后台处理
-        try:
-            from app.celery_app.tasks import expand_zip_and_dispatch_tasks
-            
-            # 对于单SQL文件和ZIP包，都派发expand_zip_and_dispatch_tasks任务
-            # 该任务会根据Job类型进行相应的处理
-            task_result = expand_zip_and_dispatch_tasks.delay(response.job_id)
-            api_logger.info(f"派发任务处理: {task_result.id}")
-                
-        except Exception as e:
-            api_logger.error(f"任务派发失败: {e}")
-            # 注意：即使任务派发失败，Job已经创建，所以仍然返回成功
-            # 用户可以稍后重试或通过其他方式处理
-        
+
         api_logger.info(f"Job创建成功（带上传）: {response.job_id}")
         return response
         
@@ -793,7 +767,7 @@ async def export_job_html(
         if error:
             api_logger.warning(f"HTML报告生成失败: {job_id}, {error}")
             return JSONResponse(
-                content=eval(error),  # error is a JSON string
+                content=json.loads(error),
                 status_code=status.HTTP_200_OK
             )
 
@@ -838,7 +812,7 @@ async def export_job_html_standalone(
         if error:
             api_logger.warning(f"HTML报告生成失败（Standalone）: {job_id}, {error}")
             return JSONResponse(
-                content=eval(error),  # error is a JSON string
+                content=json.loads(error),
                 status_code=status.HTTP_200_OK
             )
 

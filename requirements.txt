@@ -3,10 +3,6 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 gunicorn==21.2.0
 
-# 任务队列
-celery==5.3.4
-redis==5.0.1
-
 # 数据库
 sqlalchemy==2.0.41
 pymysql==1.1.0

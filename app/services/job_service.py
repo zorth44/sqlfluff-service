@@ -699,28 +699,25 @@ class JobService:
             raise JobException("创建解压文件夹任务", job_id, str(e))
     
     async def _async_scan_create_and_dispatch(self, job_id: str, extracted_folder_path: str):
-        """异步处理：文件扫描 + Task创建 + Celery派发"""
+        """异步处理：文件扫描 + Task创建（Worker 自动领取 PENDING 任务）"""
         # 为后台任务创建独立的数据库会话
         from app.core.database import create_database_session
-        
+
         db = create_database_session()
         try:
             self.logger.info(f"开始异步处理: {job_id}")
-            
+
             # 创建独立的JobService实例，使用新的数据库会话
             background_job_service = JobService(db)
-            
-            # 1. 创建Tasks（使用独立的数据库会话）
+
+            # 创建Tasks（状态为 PENDING，Worker 会自动通过 claim_task() 领取）
             await background_job_service._create_extracted_folder_tasks(job_id, extracted_folder_path)
-            
-            # 2. 派发Celery任务
-            await background_job_service._dispatch_celery_tasks(job_id)
-            
-            self.logger.info(f"异步处理完成: {job_id}")
-            
+
+            self.logger.info(f"异步处理完成: {job_id} (Tasks 已创建为 PENDING)")
+
         except Exception as e:
             self.logger.error(f"异步处理失败: {job_id}, 错误: {e}")
-            
+
             # 设置Job状态为FAILED（使用独立的数据库会话）
             try:
                 job = db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
@@ -734,32 +731,6 @@ class JobService:
         finally:
             # 确保关闭独立的数据库会话
             db.close()
-    
-    async def _dispatch_celery_tasks(self, job_id: str):
-        """派发Celery任务（从API层移到这里）"""
-        try:
-            from app.celery_app.tasks import process_sql_file
-            from app.schemas.common import TaskStatusEnum
-            
-            # 获取待处理的Tasks
-            tasks = self.db.query(LintingTask)\
-                .filter(LintingTask.job_id == job_id)\
-                .filter(LintingTask.status == TaskStatusEnum.PENDING)\
-                .all()
-            
-            dispatched_count = 0
-            for task in tasks:
-                try:
-                    process_sql_file.delay(task.task_id)
-                    dispatched_count += 1
-                except Exception as e:
-                    self.logger.error(f"派发单个任务失败: {task.task_id}, {e}")
-            
-            self.logger.info(f"派发Celery任务完成: {job_id}, 数量: {dispatched_count}")
-            
-        except Exception as e:
-            self.logger.error(f"派发Celery任务失败: {job_id}, 错误: {e}")
-            raise
     
     def _is_valid_status_transition(self, current_status: JobStatusEnum, new_status: JobStatusEnum) -> bool:
         """验证状态转换是否有效"""

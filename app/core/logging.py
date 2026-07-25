@@ -254,9 +254,7 @@ def setup_logging() -> None:
     # 设置第三方库日志级别
     logging.getLogger("uvicorn").setLevel(logging.INFO)
     logging.getLogger("uvicorn.access").setLevel(logging.INFO)
-    logging.getLogger("celery").setLevel(logging.INFO)
     logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
-    logging.getLogger("redis").setLevel(logging.WARNING)
     
     logging.info("Logging system initialized", extra={
         'log_level': settings.LOG_LEVEL,
@@ -414,7 +412,7 @@ def log_performance_metric(metric_name: str, value: float, unit: str = "ms", **l
 # 预定义的日志记录器
 app_logger = get_logger('app')
 api_logger = get_logger('api')
-celery_logger = get_logger('celery')
+worker_logger = get_logger('worker')
 database_logger = get_logger('database')
 sqlfluff_logger = get_logger('sqlfluff')
 file_logger = get_logger('file')
