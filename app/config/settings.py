@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     DATABASE_MAX_OVERFLOW: int = Field(default=30, description="数据库连接池最大溢出")
     DATABASE_POOL_TIMEOUT: int = Field(default=30, description="数据库连接超时时间")
     DATABASE_POOL_RECYCLE: int = Field(default=3600, description="连接回收时间")
+    # 默认关闭：Worker 轮询/心跳会高频打 SQL，跟 DEBUG 绑在一起会严重刷屏
+    DATABASE_ECHO: bool = Field(default=False, description="是否打印 SQLAlchemy SQL 语句", env="DATABASE_ECHO")
     
     # ============= Worker 配置（DB-as-Queue） =============
     WORKER_CONCURRENCY: int = Field(default=4, description="Worker 并发线程数", env="WORKER_CONCURRENCY")

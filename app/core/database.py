@@ -38,9 +38,9 @@ engine = create_engine(
         "write_timeout": 60,
         "autocommit": False,  # 确保事务控制
     },
-    # 日志配置
-    echo=settings.DEBUG,
-    echo_pool=settings.DEBUG,
+    # SQL 回显独立开关；勿与 DEBUG 绑定（Worker 轮询会刷屏）
+    echo=settings.DATABASE_ECHO,
+    echo_pool=False,
     # 事务隔离级别 - 使用READ_COMMITTED避免幻读问题
     isolation_level="READ_COMMITTED",
 )

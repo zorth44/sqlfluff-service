@@ -256,10 +256,14 @@ def setup_logging() -> None:
                 extra={'extra_data': {'error': str(e)}}
             )
     
-    # 设置第三方库日志级别
+    # 设置第三方库日志级别（高频噪音默认压到 WARNING）
     logging.getLogger("uvicorn").setLevel(logging.INFO)
     logging.getLogger("uvicorn.access").setLevel(logging.INFO)
     logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
+    logging.getLogger("watchfiles").setLevel(logging.WARNING)
+    logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
     # SQLFluff 内部会输出解析树等大段文本，避免刷屏拖慢 Worker
     logging.getLogger("sqlfluff").setLevel(logging.WARNING)
     
@@ -300,12 +304,10 @@ def setup_third_party_logging() -> None:
     # 无论环境，都避免 sqlfluff 解析树刷屏
     logging.getLogger('sqlfluff').setLevel(logging.WARNING)
     
-    # 特殊处理：SQLAlchemy引擎日志
-    if settings.is_development():
-        # 开发环境下可以看到SQL语句
+    # SQL 语句仅在显式开启 DATABASE_ECHO 时输出
+    if settings.DATABASE_ECHO:
         logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
     else:
-        # 生产环境下关闭SQL语句日志
         logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
 
 

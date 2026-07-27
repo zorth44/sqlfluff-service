@@ -168,3 +168,7 @@ dump.rdb
 
 # Consul数据
 consul_data/ 
+
+# 测试文件
+data/
+tmp_hive_stub/

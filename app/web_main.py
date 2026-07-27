@@ -145,18 +145,32 @@ def _configure_middleware(app: FastAPI):
         
         # 记录请求开始时间
         start_time = time.time()
+        path = request.url.path
+        # 探活/文档类请求很频繁，降到 DEBUG，避免刷屏
+        quiet_request = path.startswith("/api/v1/health") or path in {
+            "/docs", "/redoc", "/openapi.json", "/favicon.ico"
+        }
         
-        # 记录请求信息
-        api_logger.info(
-            f"请求开始: {request.method} {request.url}",
-            extra={
-                "request_id": request_id,
-                "method": request.method,
-                "url": str(request.url),
-                "user_agent": request.headers.get("user-agent"),
-                "remote_addr": request.client.host if request.client else None
-            }
-        )
+        if quiet_request:
+            api_logger.debug(
+                f"请求开始: {request.method} {request.url}",
+                extra={
+                    "request_id": request_id,
+                    "method": request.method,
+                    "url": str(request.url),
+                }
+            )
+        else:
+            api_logger.info(
+                f"请求开始: {request.method} {request.url}",
+                extra={
+                    "request_id": request_id,
+                    "method": request.method,
+                    "url": str(request.url),
+                    "user_agent": request.headers.get("user-agent"),
+                    "remote_addr": request.client.host if request.client else None
+                }
+            )
         
         # 处理请求
         try:
@@ -181,15 +195,24 @@ def _configure_middleware(app: FastAPI):
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Response-Time"] = f"{process_time:.4f}s"
         
-        # 记录响应信息
-        api_logger.info(
-            f"请求完成: {response.status_code}",
-            extra={
-                "request_id": request_id,
-                "status_code": response.status_code,
-                "response_time": process_time
-            }
-        )
+        if quiet_request:
+            api_logger.debug(
+                f"请求完成: {response.status_code}",
+                extra={
+                    "request_id": request_id,
+                    "status_code": response.status_code,
+                    "response_time": process_time
+                }
+            )
+        else:
+            api_logger.info(
+                f"请求完成: {response.status_code}",
+                extra={
+                    "request_id": request_id,
+                    "status_code": response.status_code,
+                    "response_time": process_time
+                }
+            )
         
         return response
 
