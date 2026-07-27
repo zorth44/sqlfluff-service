@@ -84,9 +84,10 @@ def process_sql_file(task_id: str, worker_id: str) -> Dict[str, Any]:
     with managed_db_session() as db:
         task, job = _load_task_and_job(db, task_id)
 
-        # 更新状态为 PROCESSING
-        task.status = TaskStatusEnum.PROCESSING
-        db.commit()
+        # 领取时已设为 IN_PROGRESS；此处仅确保状态一致
+        if task.status != TaskStatusEnum.IN_PROGRESS:
+            task.status = TaskStatusEnum.IN_PROGRESS
+            db.commit()
 
     # 2. 验证文件
     file_manager = FileManager()
@@ -236,6 +237,23 @@ def _batch_insert_violations(
     从源文件中读取对应行的 SQL 代码填充 sql_line 字段。
     """
     violations = analysis_result.get("violations", [])
+
+    # 重试/回收后重跑时先清理旧 violations，避免重复插入
+    try:
+        deleted = db.query(LintingViolation).filter(
+            LintingViolation.task_id == task.task_id
+        ).delete(synchronize_session=False)
+        if deleted:
+            logger.info(
+                f"Cleared {deleted} existing violations for task {task.task_id}"
+            )
+    except Exception as e:
+        logger.error(
+            f"Failed to clear old violations for task {task.task_id}: {e}"
+        )
+        db.rollback()
+        return
+
     if not violations:
         logger.info(f"Task {task.task_id} has no violations, skipping insert")
         return
@@ -322,6 +340,8 @@ def _update_task_success(
     task.severity_blocker = severity_statistics["BLOCKER"]
     task.severity_critical = severity_statistics["CRITICAL"]
     task.severity_unknown = severity_statistics["UNKNOWN"]
+    task.claim_id = None
+    task.error_message = None
 
     db.commit()
     logger.info(f"Task {task_id} updated to SUCCESS, violations: {total_violations}")

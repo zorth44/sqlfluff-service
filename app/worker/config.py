@@ -28,9 +28,14 @@ class WorkerConfig:
         default_factory=lambda: int(os.getenv('WORKER_HEARTBEAT_INTERVAL', '30'))
     )
 
-    # 僵尸任务超时（秒）- 超过此时间无心跳的 PROCESSING 任务将被回收
+    # Worker 心跳超时（秒）- 超过此时间无心跳的 RUNNING Worker 标记为 DEAD
     zombie_timeout: int = field(
         default_factory=lambda: int(os.getenv('WORKER_ZOMBIE_TIMEOUT', '600'))
+    )
+
+    # 单任务超时（秒）- IN_PROGRESS 超过此时长将被回收（覆盖卡住的任务）
+    task_timeout: int = field(
+        default_factory=lambda: int(os.getenv('WORKER_TASK_TIMEOUT', '1800'))
     )
 
     # 僵尸扫描间隔（秒）

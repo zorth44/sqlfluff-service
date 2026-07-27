@@ -25,8 +25,8 @@ def run_tests():
         ["python", "-m", "pytest", "tests/services/", "-v", "--tb=short"],
         # API集成测试
         ["python", "-m", "pytest", "tests/api/", "-v", "--tb=short"],
-        # Celery任务测试
-        ["python", "-m", "pytest", "tests/celery_app/", "-v", "--tb=short"],
+        # DB Worker 测试
+        ["python", "-m", "pytest", "tests/worker/", "-v", "--tb=short"],
         # 覆盖率测试
         ["python", "-m", "pytest", "tests/", "--cov=app", "--cov-report=html", "--cov-report=term-missing"]
     ]

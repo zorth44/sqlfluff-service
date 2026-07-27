@@ -32,8 +32,6 @@ check_env_vars() {
     log_info "检查环境变量..."
     
     local required_vars=(
-        "REDIS_HOST"
-        "REDIS_PORT"
         "NFS_SHARE_ROOT_PATH"
         "MYSQL_DATABASE_HOST"
         "MYSQL_DATABASE_PORT"
@@ -107,21 +105,6 @@ except Exception as e:
     else
         log_error "数据库连接失败"
         exit 1
-    fi
-}
-
-# Redis连接检查
-check_redis() {
-    log_info "检查Redis连接..."
-    
-    # 构建Redis URL
-    local redis_url="redis://${REDIS_HOST}:${REDIS_PORT}/${REDIS_DB_BROKER:-0}"
-    
-    # 简单检查Redis配置
-    if [[ -n "$REDIS_HOST" && -n "$REDIS_PORT" ]]; then
-        log_success "Redis配置正确: $redis_url"
-    else
-        log_warning "Redis配置可能有问题: HOST=$REDIS_HOST, PORT=$REDIS_PORT"
     fi
 }
 
@@ -211,7 +194,6 @@ main() {
     # 检查环境
     check_env_vars
     check_database
-    check_redis
     check_nfs
     
     # 运行迁移

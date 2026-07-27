@@ -28,6 +28,7 @@ def main():
     print(f"  Poll Interval: {config.poll_interval}s")
     print(f"  Heartbeat Interval: {config.heartbeat_interval}s")
     print(f"  Zombie Timeout: {config.zombie_timeout}s")
+    print(f"  Task Timeout: {config.task_timeout}s")
     print(f"  Max Retries: {config.max_retries}")
 
     # 启动 DB Worker

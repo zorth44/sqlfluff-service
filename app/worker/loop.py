@@ -22,14 +22,13 @@ import uuid
 import threading
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 
 from sqlalchemy.orm import Session
 
-from app.core.database import SessionLocal
 from app.core.db_session import managed_db_session
-from app.models.database import LintingTask, WorkerRegistry
-from app.schemas.common import TaskStatusEnum
+from app.models.database import LintingTask, LintingJob, WorkerRegistry
+from app.schemas.common import TaskStatusEnum, JobStatusEnum
 from app.worker.config import WorkerConfig
 from app.worker.processor import process_task_safe
 
@@ -57,30 +56,148 @@ def claim_task(db: Session, worker_id: str) -> Optional[LintingTask]:
     - 多个 Worker 不会领取同一任务
     - 已被其他 Worker 锁定的任务自动跳过
     - 按优先级 DESC + 创建时间 ASC 排序（优先级高的先处理）
-
-    Args:
-        db: 数据库会话
-        worker_id: Worker 标识
-
-    Returns:
-        LintingTask | None: 领取到的任务，无任务时返回 None
     """
-    task = db.execute(
+    task = (
         db.query(LintingTask)
         .filter(LintingTask.status == TaskStatusEnum.PENDING)
         .order_by(LintingTask.priority.desc(), LintingTask.created_at.asc())
-        .limit(1)
         .with_for_update(skip_locked=True)
-    ).scalar_one_or_none()
+        .first()
+    )
 
     if task:
-        task.status = TaskStatusEnum.PROCESSING
+        task.status = TaskStatusEnum.IN_PROGRESS
         task.claim_id = f"{worker_id}:{uuid.uuid4().hex[:8]}"
         task.claimed_at = datetime.utcnow()
+        task.error_message = None
+
+        # 首次领取时把 Job 从 ACCEPTED 推进到 PROCESSING
+        job = db.query(LintingJob).filter(
+            LintingJob.job_id == task.job_id
+        ).first()
+        if job and job.status == JobStatusEnum.ACCEPTED:
+            job.status = JobStatusEnum.PROCESSING
+
         db.commit()
         logger.debug(f"Claimed task {task.task_id} for job {task.job_id}")
 
     return task
+
+
+def reset_task_after_failure(
+    task: LintingTask,
+    max_retries: int,
+    reason: str,
+) -> str:
+    """
+    按重试策略重置或永久失败一个僵尸任务。
+
+    Returns:
+        'PENDING' | 'FAILURE' — 任务最终状态
+    """
+    task.retry_count = (task.retry_count or 0) + 1
+    task.claim_id = None
+    task.claimed_at = None
+
+    if task.retry_count > max_retries:
+        task.status = TaskStatusEnum.FAILURE
+        task.error_message = (
+            f"超过最大重试次数（{max_retries}次），{reason}"
+        )
+        return TaskStatusEnum.FAILURE.value
+
+    task.status = TaskStatusEnum.PENDING
+    task.error_message = None
+    return TaskStatusEnum.PENDING.value
+
+
+def reclaim_zombie_tasks(db: Session, config: WorkerConfig) -> int:
+    """
+    回收僵尸任务。
+
+    回收条件（满足任一即可）:
+    1. Worker 心跳超时（RUNNING 且 heartbeat_at 过旧）→ 标记 DEAD，回收其任务
+    2. Worker 已是 STOPPED/DEAD，但仍挂着 IN_PROGRESS 任务
+    3. 任务 claimed_at 超过 task_timeout（覆盖卡住但仍有心跳的场景）
+
+    对目标任务行使用 FOR UPDATE SKIP LOCKED，避免多 Worker 扫尸时双计 retry_count。
+    """
+    now = datetime.utcnow()
+    heartbeat_cutoff = now - timedelta(seconds=config.zombie_timeout)
+    task_cutoff = now - timedelta(seconds=config.task_timeout)
+    reclaimed = 0
+
+    # 1. 心跳超时的 RUNNING Worker → DEAD
+    stale_workers = (
+        db.query(WorkerRegistry)
+        .filter(
+            WorkerRegistry.status == 'RUNNING',
+            WorkerRegistry.heartbeat_at < heartbeat_cutoff,
+        )
+        .with_for_update(skip_locked=True)
+        .all()
+    )
+
+    for worker in stale_workers:
+        worker.status = 'DEAD'
+        worker.stopped_at = now
+        logger.warning(
+            f"Worker {worker.worker_id} marked DEAD "
+            f"(last heartbeat: {worker.heartbeat_at})"
+        )
+
+    # 2. 找出候选 IN_PROGRESS 任务并加行锁
+    candidates: List[LintingTask] = (
+        db.query(LintingTask)
+        .filter(LintingTask.status == TaskStatusEnum.IN_PROGRESS)
+        .with_for_update(skip_locked=True)
+        .all()
+    )
+
+    for task in candidates:
+        worker_id_prefix = None
+        if task.claim_id and ':' in task.claim_id:
+            worker_id_prefix = task.claim_id.rsplit(':', 1)[0]
+
+        timed_out = (
+            task.claimed_at is not None and task.claimed_at < task_cutoff
+        )
+
+        worker_row = None
+        if worker_id_prefix:
+            worker_row = (
+                db.query(WorkerRegistry)
+                .filter(WorkerRegistry.worker_id == worker_id_prefix)
+                .first()
+            )
+
+        # STOPPED/DEAD/缺失 Worker 的任务立即回收；仍 RUNNING 的只按 task_timeout
+        worker_inactive = (
+            worker_row is None or worker_row.status in ('DEAD', 'STOPPED')
+        )
+        should_reclaim = timed_out or worker_inactive
+
+        if not should_reclaim:
+            continue
+
+        reason = (
+            f"任务超时（claimed_at={task.claimed_at}）"
+            if timed_out
+            else f"Worker 不可用: {worker_id_prefix or 'unknown'}"
+        )
+        new_status = reset_task_after_failure(task, config.max_retries, reason)
+        reclaimed += 1
+        logger.warning(
+            f"Reclaimed task {task.task_id} -> {new_status}: {reason}"
+        )
+
+    if reclaimed or stale_workers:
+        logger.info(
+            f"Zombie sweep: {len(stale_workers)} dead workers, "
+            f"{reclaimed} tasks reclaimed"
+        )
+
+    return reclaimed
 
 
 # ───────────────────── Worker Thread (任务执行) ─────────────────────
@@ -172,6 +289,7 @@ class HeartbeatThread(threading.Thread):
                 worker.status = 'RUNNING'
                 worker.heartbeat_at = datetime.utcnow()
                 worker.pid = os.getpid()
+                worker.stopped_at = None
             else:
                 worker = WorkerRegistry(
                     worker_id=self.ctx.worker_id,
@@ -198,7 +316,7 @@ class HeartbeatThread(threading.Thread):
                 # 统计当前处理中的任务数
                 active_count = db.query(LintingTask).filter(
                     LintingTask.claim_id.like(f"{self.ctx.worker_id}:%"),
-                    LintingTask.status == TaskStatusEnum.PROCESSING
+                    LintingTask.status == TaskStatusEnum.IN_PROGRESS
                 ).count()
                 worker.current_task_count = active_count
 
@@ -207,12 +325,9 @@ class HeartbeatThread(threading.Thread):
 
 class ZombieSweepThread(threading.Thread):
     """
-    僵尸回收线程：定期回收超时的 PROCESSING 任务
+    僵尸回收线程：定期回收超时的 IN_PROGRESS 任务
 
-    回收逻辑：
-    1. 查找心跳超时的 Worker（超过 zombie_timeout 无心跳）
-    2. 将关联的 PROCESSING 任务重置为 PENDING（retry_count++）
-    3. 超过 max_retries 的任务标记为 FAILURE
+    回收逻辑见 reclaim_zombie_tasks()。
     """
 
     def __init__(self, ctx: WorkerContext):
@@ -222,79 +337,20 @@ class ZombieSweepThread(threading.Thread):
     def run(self):
         logger.info(
             f"Zombie sweep thread started "
-            f"(timeout: {self.ctx.config.zombie_timeout}s, "
+            f"(zombie_timeout: {self.ctx.config.zombie_timeout}s, "
+            f"task_timeout: {self.ctx.config.task_timeout}s, "
             f"interval: {self.ctx.config.zombie_sweep_interval}s)"
         )
 
         while self.ctx.running:
             time.sleep(self.ctx.config.zombie_sweep_interval)
             try:
-                count = self._reclaim()
+                with managed_db_session() as db:
+                    count = reclaim_zombie_tasks(db, self.ctx.config)
                 if count > 0:
                     logger.warning(f"Reclaimed {count} zombie tasks")
             except Exception as e:
                 logger.error(f"Zombie sweep failed: {e}", exc_info=True)
-
-    def _reclaim(self) -> int:
-        """执行僵尸任务回收"""
-        with managed_db_session() as db:
-            cutoff = datetime.utcnow() - timedelta(
-                seconds=self.ctx.config.zombie_timeout
-            )
-
-            # 1. 查找心跳超时的 Worker
-            stale_workers = db.query(WorkerRegistry).filter(
-                WorkerRegistry.status == 'RUNNING',
-                WorkerRegistry.heartbeat_at < cutoff
-            ).all()
-
-            if not stale_workers:
-                return 0
-
-            stale_ids = [w.worker_id for w in stale_workers]
-
-            # 标记 Worker 为 DEAD
-            for w in stale_workers:
-                w.status = 'DEAD'
-                w.stopped_at = datetime.utcnow()
-                logger.warning(
-                    f"Worker {w.worker_id} marked DEAD "
-                    f"(last heartbeat: {w.heartbeat_at})"
-                )
-
-            # 2. 回收它们的 PROCESSING 任务
-            # 使用 claim_id 前缀匹配查找
-            reclaimed = 0
-
-            for stale_id in stale_ids:
-                tasks = db.query(LintingTask).filter(
-                    LintingTask.status == TaskStatusEnum.PROCESSING,
-                    LintingTask.claim_id.like(f"{stale_id}:%")
-                ).all()
-
-                for task in tasks:
-                    task.retry_count = (task.retry_count or 0) + 1
-
-                    if task.retry_count > self.ctx.config.max_retries:
-                        # 超过最大重试次数，标记为永久失败
-                        task.status = TaskStatusEnum.FAILURE
-                        task.error_message = (
-                            f"超过最大重试次数（{self.ctx.config.max_retries}次），"
-                            f"最后处理 Worker: {stale_id}"
-                        )
-                    else:
-                        # 重置为 PENDING，等待重新分配
-                        task.status = TaskStatusEnum.PENDING
-
-                    task.claim_id = None
-                    task.claimed_at = None
-                    reclaimed += 1
-
-            logger.info(
-                f"Zombie sweep: {len(stale_ids)} dead workers, "
-                f"{reclaimed} tasks reclaimed"
-            )
-            return reclaimed
 
 
 # ───────────────────── Main Entry Point ─────────────────────
@@ -322,6 +378,7 @@ def start_worker(config: Optional[WorkerConfig] = None):
         f"poll_interval={config.poll_interval}s, "
         f"heartbeat_interval={config.heartbeat_interval}s, "
         f"zombie_timeout={config.zombie_timeout}s, "
+        f"task_timeout={config.task_timeout}s, "
         f"max_retries={config.max_retries}"
     )
 
@@ -338,7 +395,7 @@ def start_worker(config: Optional[WorkerConfig] = None):
         thread.start()
         worker_threads.append(thread)
 
-    # 优雅关闭处理
+    # 优雅关闭处理：先停领任务并等待在途任务，再标记 STOPPED
     def shutdown(signum, frame):
         if not ctx.running:
             logger.warning("Force shutdown")
@@ -349,24 +406,25 @@ def start_worker(config: Optional[WorkerConfig] = None):
         )
         ctx.running = False
 
-        # 标记 Worker 为 STOPPED
-        try:
-            with managed_db_session() as db:
-                worker = db.query(WorkerRegistry).filter_by(
-                    worker_id=ctx.worker_id
-                ).first()
-                if worker:
-                    worker.status = 'STOPPED'
-                    worker.stopped_at = datetime.utcnow()
-            logger.info("Worker marked as STOPPED in registry")
-        except Exception as e:
-            logger.error(f"Failed to mark worker as STOPPED: {e}")
-
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
     # 等待所有任务线程结束
     for thread in worker_threads:
         thread.join()
+
+    # 在途任务结束后再标记 STOPPED，避免扫尸线程抢回收正在收尾的任务
+    try:
+        with managed_db_session() as db:
+            worker = db.query(WorkerRegistry).filter_by(
+                worker_id=ctx.worker_id
+            ).first()
+            if worker:
+                worker.status = 'STOPPED'
+                worker.stopped_at = datetime.utcnow()
+                worker.current_task_count = 0
+        logger.info("Worker marked as STOPPED in registry")
+    except Exception as e:
+        logger.error(f"Failed to mark worker as STOPPED: {e}")
 
     logger.info(f"Worker {ctx.worker_id} shut down gracefully")

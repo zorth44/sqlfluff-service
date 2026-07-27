@@ -42,7 +42,9 @@ class Settings(BaseSettings):
     WORKER_CONCURRENCY: int = Field(default=4, description="Worker 并发线程数", env="WORKER_CONCURRENCY")
     WORKER_POLL_INTERVAL: float = Field(default=2.0, description="无任务时轮询间隔(秒)", env="WORKER_POLL_INTERVAL")
     WORKER_HEARTBEAT_INTERVAL: int = Field(default=30, description="Worker 心跳间隔(秒)", env="WORKER_HEARTBEAT_INTERVAL")
-    WORKER_ZOMBIE_TIMEOUT: int = Field(default=600, description="僵尸任务超时(秒)", env="WORKER_ZOMBIE_TIMEOUT")
+    WORKER_ZOMBIE_TIMEOUT: int = Field(default=600, description="Worker 心跳超时(秒)", env="WORKER_ZOMBIE_TIMEOUT")
+    WORKER_TASK_TIMEOUT: int = Field(default=1800, description="单任务超时(秒)", env="WORKER_TASK_TIMEOUT")
+    WORKER_ZOMBIE_SWEEP_INTERVAL: int = Field(default=120, description="僵尸扫描间隔(秒)", env="WORKER_ZOMBIE_SWEEP_INTERVAL")
     WORKER_MAX_RETRIES: int = Field(default=3, description="任务最大重试次数", env="WORKER_MAX_RETRIES")
     
     # ============= NFS共享目录配置 =============
@@ -188,6 +190,8 @@ class Settings(BaseSettings):
             'poll_interval': self.WORKER_POLL_INTERVAL,
             'heartbeat_interval': self.WORKER_HEARTBEAT_INTERVAL,
             'zombie_timeout': self.WORKER_ZOMBIE_TIMEOUT,
+            'task_timeout': self.WORKER_TASK_TIMEOUT,
+            'zombie_sweep_interval': self.WORKER_ZOMBIE_SWEEP_INTERVAL,
             'max_retries': self.WORKER_MAX_RETRIES,
         }
     

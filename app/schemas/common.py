@@ -122,7 +122,7 @@ class HealthCheckResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now, description="检查时间")
     version: str = Field(description="服务版本")
     database: bool = Field(description="数据库连接状态")
-    redis: bool = Field(description="Redis连接状态")
+    workers: bool = Field(description="Worker 运行状态")
     nfs: bool = Field(description="NFS存储状态")
     
     class Config:

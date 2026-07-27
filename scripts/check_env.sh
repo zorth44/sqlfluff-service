@@ -12,14 +12,11 @@ echo "========== 环境变量检查 =========="
 # 必需的环境变量
 REQUIRED_VARS=(
     "MYSQL_DATABASE_HOST"
-    "MYSQL_DATABASE_PORT" 
+    "MYSQL_DATABASE_PORT"
     "MYSQL_DATABASE_USERNAME"
     "MYSQL_DATABASE_PASSWORD"
     "MYSQL_DATABASE_NAME"
-    "REDIS_HOST"
-    "REDIS_PORT"
     "NFS_SHARE_ROOT_PATH"
-    "DATABASE_URL"
 )
 
 # 可选但重要的环境变量
@@ -27,13 +24,15 @@ OPTIONAL_VARS=(
     "ENVIRONMENT"
     "PORT"
     "GUNICORN_WORKERS"
-    "CELERY_WORKER_CONCURRENCY"
-    "CELERY_LOG_LEVEL"
-    "CELERY_QUEUES"
-    "REDIS_PASSWORD"
-    "REDIS_CLUSTER_MODE"
-    "REDIS_CLUSTER_ENABLED"
+    "WORKER_CONCURRENCY"
+    "WORKER_POLL_INTERVAL"
+    "WORKER_HEARTBEAT_INTERVAL"
+    "WORKER_ZOMBIE_TIMEOUT"
+    "WORKER_TASK_TIMEOUT"
+    "WORKER_MAX_RETRIES"
+    "DATABASE_URL"
     "CONSUL_URL"
+    "CONSUL_HOST"
 )
 
 missing_vars=()
@@ -43,8 +42,6 @@ for var in "${REQUIRED_VARS[@]}"; do
     if [[ -n "${!var}" ]]; then
         if [[ "$var" == *"PASSWORD"* ]]; then
             echo -e "  ✓ $var: ***已设置***"
-        elif [[ "$var" == "DATABASE_URL" ]]; then
-            echo -e "  ✓ $var: mysql+pymysql://***:***@${MYSQL_DATABASE_HOST}:${MYSQL_DATABASE_PORT}/${MYSQL_DATABASE_NAME}"
         else
             echo -e "  ✓ $var: ${!var}"
         fi
@@ -59,6 +56,8 @@ for var in "${OPTIONAL_VARS[@]}"; do
     if [[ -n "${!var}" ]]; then
         if [[ "$var" == *"PASSWORD"* ]]; then
             echo -e "  ✓ $var: ***已设置***"
+        elif [[ "$var" == "DATABASE_URL" ]]; then
+            echo -e "  ✓ $var: mysql+pymysql://***:***@${MYSQL_DATABASE_HOST}:${MYSQL_DATABASE_PORT}/${MYSQL_DATABASE_NAME}"
         else
             echo -e "  ✓ $var: ${!var}"
         fi

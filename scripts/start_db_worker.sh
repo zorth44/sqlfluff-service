@@ -6,7 +6,8 @@
 #   WORKER_CONCURRENCY      并发线程数（默认 4）
 #   WORKER_POLL_INTERVAL    轮询间隔秒数（默认 2.0）
 #   WORKER_HEARTBEAT_INTERVAL 心跳间隔秒数（默认 30）
-#   WORKER_ZOMBIE_TIMEOUT   僵尸超时秒数（默认 600）
+#   WORKER_ZOMBIE_TIMEOUT   Worker 心跳超时秒数（默认 600）
+#   WORKER_TASK_TIMEOUT     单任务超时秒数（默认 1800）
 #   WORKER_MAX_RETRIES      最大重试次数（默认 3）
 #
 # 必需环境变量:

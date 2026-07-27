@@ -18,7 +18,8 @@
 #     d. 重置 PROCESSING -> ACCEPTED
 #
 #   本脚本 (自动):
-#     -> 通过 ORM 查询 ACCEPTED 状态的 ZIP Job 并派发 Celery 任务
+#     -> 通过 ORM 查询 ACCEPTED 状态的 ZIP Job，调用 process_job_expansion
+#        创建 PENDING Tasks，由 DB Worker 自动领取处理
 # ============================================================
 
 set -e
@@ -55,7 +56,7 @@ if [ -z "$START_TIME" ]; then
 fi
 
 echo "============================================"
-echo "ZIP Job 批量重跑 - Celery 派发"
+echo "ZIP Job 批量重跑 - DB Worker 展开"
 echo "时间范围: $START_TIME ~ ${END_TIME:-现在}"
 echo "模式: $( [ "$DRY_RUN" = true ] && echo 'DRY-RUN (预览)' || echo '执行' )"
 echo "============================================"
@@ -86,9 +87,9 @@ else
     PY_END="None"
 fi
 
-# ---- 派发 Celery 任务 ----
+# ---- 展开 Job（创建 PENDING Tasks）----
 echo ""
-echo "派发 Celery 任务..."
+echo "展开 ZIP Job（创建 PENDING Tasks）..."
 
 if [ "$DRY_RUN" = true ]; then
     python3 -c "
@@ -119,7 +120,7 @@ db.close()
 "
 else
     python3 -c "
-from app.celery_app.tasks import expand_zip_and_dispatch_tasks
+from app.worker.job_processor import process_job_expansion
 from app.core.database import SessionLocal
 from app.models.database import LintingJob
 from app.schemas.common import JobStatusEnum
@@ -135,15 +136,19 @@ if end_time is not None:
     query = query.filter(LintingJob.created_at <= end_time)
 
 jobs = query.all()
-print(f'Dispatching {len(jobs)} jobs')
-for j in jobs:
-    expand_zip_and_dispatch_tasks.delay(j.job_id)
-    print(f'  OK {j.job_id}')
+print(f'Expanding {len(jobs)} jobs')
 db.close()
+
+for j in jobs:
+    try:
+        result = process_job_expansion(j.job_id)
+        print(f'  OK {j.job_id}: {result.get(\"total_tasks\", 0)} tasks')
+    except Exception as e:
+        print(f'  FAIL {j.job_id}: {e}')
 "
 fi
 
 echo ""
 echo "============================================"
-echo "完成!"
+echo "完成! PENDING Tasks 将由 DB Worker 自动领取处理"
 echo "============================================"
