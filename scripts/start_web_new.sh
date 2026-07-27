@@ -42,8 +42,8 @@ echo "日志文件: $LOG_FILE_PATH"
 # 设置Python路径
 export PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}."
 
-# 启动Web服务
-if [ "${ENVIRONMENT:-development}" = "production" ]; then
+# 启动Web服务（settings 仅认 dev/test/prod；兼容旧值 production）
+if [[ "${ENVIRONMENT:-dev}" == "prod" || "${ENVIRONMENT:-dev}" == "production" ]]; then
     # 生产环境使用Gunicorn
     nohup gunicorn app.web_main:app \
         -w "${GUNICORN_WORKERS:-4}" \

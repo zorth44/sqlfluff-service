@@ -32,32 +32,35 @@ export MYSQL_DATABASE_USERNAME=sqlfluff
 export MYSQL_DATABASE_PASSWORD=your_password
 export MYSQL_DATABASE_NAME=sqlfluff_db
 
-# Redis配置
-export REDIS_HOST=localhost
-export REDIS_PORT=6379
-export REDIS_DB_BROKER=0
-export REDIS_DB_RESULT=1
-export REDIS_PASSWORD=your_redis_password
-export REDIS_CLUSTER_MODE=false
-export REDIS_CLUSTER_ENABLED=false
-# export REDIS_CLUSTER_NODES=node1:7000,node2:7000,node3:7000
-
 # NFS配置
 export NFS_SHARE_ROOT_PATH=/data/bddf/resource
 
-# 服务配置
-export ENVIRONMENT=production
+# 服务配置（ENVIRONMENT 仅支持: dev / test / prod）
+export ENVIRONMENT=prod
 export PORT=8000
 export GUNICORN_WORKERS=4
+export WEB_HOST=0.0.0.0
+export WEB_PORT=8000
 
-# Celery配置
-export CELERY_WORKER_CONCURRENCY=4
-export CELERY_LOG_LEVEL=INFO
-export CELERY_QUEUES=default,sql_analysis,zip_processing
+# Worker 配置（DB-as-Queue）
+export WORKER_CONCURRENCY=4
+export WORKER_POLL_INTERVAL=2.0
+export WORKER_HEARTBEAT_INTERVAL=30
+export WORKER_ZOMBIE_TIMEOUT=600
+export WORKER_TASK_TIMEOUT=1800
+export WORKER_ZOMBIE_SWEEP_INTERVAL=120
+export WORKER_MAX_RETRIES=3
 
 # Consul配置
-export CONSUL_URL=localhost
+export CONSUL_HOST=localhost
 export CONSUL_PORT=8500
+# 必须设置: 服务注册的IP地址（替换为你的服务器IP）
+export CONSUL_SERVICE_IP=192.168.1.100
+
+# 日志配置
+export LOG_LEVEL=INFO
+export LOG_FORMAT=json
+export LOG_FILE_BACKUP_COUNT=14
 
 # 构建数据库URL
 export DATABASE_URL="mysql+pymysql://${MYSQL_DATABASE_USERNAME}:${MYSQL_DATABASE_PASSWORD}@${MYSQL_DATABASE_HOST}:${MYSQL_DATABASE_PORT}/${MYSQL_DATABASE_NAME}"
@@ -80,28 +83,31 @@ echo "========== 环境变量检查 =========="
 # 必需的环境变量
 REQUIRED_VARS=(
     "MYSQL_DATABASE_HOST"
-    "MYSQL_DATABASE_PORT" 
+    "MYSQL_DATABASE_PORT"
     "MYSQL_DATABASE_USERNAME"
     "MYSQL_DATABASE_PASSWORD"
     "MYSQL_DATABASE_NAME"
-    "REDIS_HOST"
-    "REDIS_PORT"
     "NFS_SHARE_ROOT_PATH"
-    "DATABASE_URL"
 )
 
 # 可选但重要的环境变量
 OPTIONAL_VARS=(
     "ENVIRONMENT"
     "PORT"
+    "WEB_PORT"
     "GUNICORN_WORKERS"
-    "CELERY_WORKER_CONCURRENCY"
-    "CELERY_LOG_LEVEL"
-    "CELERY_QUEUES"
-    "REDIS_PASSWORD"
-    "REDIS_CLUSTER_MODE"
-    "REDIS_CLUSTER_ENABLED"
+    "WORKER_CONCURRENCY"
+    "WORKER_POLL_INTERVAL"
+    "WORKER_HEARTBEAT_INTERVAL"
+    "WORKER_ZOMBIE_TIMEOUT"
+    "WORKER_TASK_TIMEOUT"
+    "WORKER_ZOMBIE_SWEEP_INTERVAL"
+    "WORKER_MAX_RETRIES"
+    "DATABASE_URL"
     "CONSUL_URL"
+    "CONSUL_HOST"
+    "CONSUL_SERVICE_IP"
+    "LOG_FILE_BACKUP_COUNT"
 )
 
 missing_vars=()
@@ -111,8 +117,6 @@ for var in "${REQUIRED_VARS[@]}"; do
     if [[ -n "${!var}" ]]; then
         if [[ "$var" == *"PASSWORD"* ]]; then
             echo -e "  ✓ $var: ***已设置***"
-        elif [[ "$var" == "DATABASE_URL" ]]; then
-            echo -e "  ✓ $var: mysql+pymysql://***:***@${MYSQL_DATABASE_HOST}:${MYSQL_DATABASE_PORT}/${MYSQL_DATABASE_NAME}"
         else
             echo -e "  ✓ $var: ${!var}"
         fi
@@ -127,6 +131,8 @@ for var in "${OPTIONAL_VARS[@]}"; do
     if [[ -n "${!var}" ]]; then
         if [[ "$var" == *"PASSWORD"* ]]; then
             echo -e "  ✓ $var: ***已设置***"
+        elif [[ "$var" == "DATABASE_URL" ]]; then
+            echo -e "  ✓ $var: mysql+pymysql://***:***@${MYSQL_DATABASE_HOST}:${MYSQL_DATABASE_PORT}/${MYSQL_DATABASE_NAME}"
         else
             echo -e "  ✓ $var: ${!var}"
         fi

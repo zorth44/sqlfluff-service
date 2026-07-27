@@ -268,9 +268,8 @@ Compose 中 Web / Worker 共用 NFS 卷与 MySQL；生产请按实际环境调�
 
 堡垒机场景的打包、上传、启停与回滚见：
 
-- [DEPLOYMENT_README.md](DEPLOYMENT_README.md)
-- [docs/deployment_guide.md](docs/deployment_guide.md)
-- [python-deploy-guide.md](python-deploy-guide.md)
+- [DEPLOYMENT_README.md](DEPLOYMENT_README.md)（一页纸速览）
+- [docs/deployment_guide.md](docs/deployment_guide.md)（完整部署手册）
 
 要点：
 
@@ -283,6 +282,7 @@ Compose 中 Web / Worker 共用 NFS 卷与 MySQL；生产请按实际环境调�
 
 | 文档 | 内容 |
 | --- | --- |
+| [docs/deployment_guide.md](docs/deployment_guide.md) | 部署手册 |
 | [docs/dialect_configuration.md](docs/dialect_configuration.md) | SQL 方言配置 |
 | [docs/internal_network_ip_configuration.md](docs/internal_network_ip_configuration.md) | 内网 IP / Consul 注册 |
 | [docs/rerun_zip_jobs_sql.md](docs/rerun_zip_jobs_sql.md) | ZIP Job 重跑说明 |
