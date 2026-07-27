@@ -612,20 +612,12 @@ scrape_configs:
 - 应用日志: `/var/log/sqlfluff/app.log`
 
 #### 日志轮转
-```bash
-# 配置logrotate
-sudo tee /etc/logrotate.d/sqlfluff << EOF
-/var/log/sqlfluff/*.log {
-    daily
-    rotate 30
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 644 app app
-}
-EOF
-```
+
+日志由进程内 `GzipTimedRotatingFileHandler` 管理，无需 logrotate / cron：
+
+- 固定文件名：`web.log` / `worker.log`（由启动脚本设置 `LOG_FILE_PATH`）
+- 每天午夜轮转为 `*.YYYY-MM-DD.gz`
+- 通过 `LOG_FILE_BACKUP_COUNT`（默认 14）保留最近 N 天历史并自动删除更旧文件
 
 ### 备份策略
 

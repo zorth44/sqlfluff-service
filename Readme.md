@@ -287,7 +287,6 @@ Compose 中 Web / Worker 共用 NFS 卷与 MySQL；生产请按实际环境调�
 | [docs/internal_network_ip_configuration.md](docs/internal_network_ip_configuration.md) | 内网 IP / Consul 注册 |
 | [docs/rerun_zip_jobs_sql.md](docs/rerun_zip_jobs_sql.md) | ZIP Job 重跑说明 |
 | [scripts/README_CSV_REPORT.md](scripts/README_CSV_REPORT.md) | CSV 报告脚本 |
-| [scripts/README_LOG_CLEANUP.md](scripts/README_LOG_CLEANUP.md) | 日志清理 |
 
 ## 许可证
 

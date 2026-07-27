@@ -33,7 +33,7 @@ cd "$CURRENT_DIR"
 
 # 使用应用内日志轮转：固定文件名 + 按日轮转
 export LOG_FILE_PATH="$LOG_DIR/worker.log"
-export LOG_FILE_BACKUP_COUNT=7
+export LOG_FILE_BACKUP_COUNT=14
 
 echo "启动 DB-as-Queue Worker 服务..."
 echo "日志文件: $LOG_FILE_PATH"

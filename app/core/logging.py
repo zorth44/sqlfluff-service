@@ -1,26 +1,71 @@
 """
 统一日志配置模块
 
-提供结构化日志输出、不同日志级别配置、日志文件轮转功能。
-为FastAPI和Celery提供统一的日志格式和配置。
+提供结构化日志输出、不同日志级别配置、日志文件按日轮转与 gzip 压缩。
+为 FastAPI Web 与 DB Worker 提供统一的日志格式和配置。
 """
 
+import gzip
 import logging
 import logging.handlers
 import sys
 import json
 import os
+import re
+import shutil
 import time
-from datetime import datetime, date, timedelta
-from typing import Dict, Any, Optional
+import traceback
+from datetime import datetime, date
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 from app.config.settings import settings
-import traceback
-from contextvars import ContextVar
 
 # 模块级变量用于存储上下文过滤器和性能日志记录器
 _context_filter: Optional['ContextFilter'] = None
 _performance_logger: Optional['PerformanceLogger'] = None
+
+
+class GzipTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
+    """按日轮转；轮转时 gzip 压缩，并按 backupCount 清理历史文件（含 .gz）。"""
+
+    # 匹配 YYYY-MM-DD 与 YYYY-MM-DD.gz（兼容尚未压缩的旧轮转文件）
+    _BACKUP_EXT_MATCH = re.compile(r"^\d{4}-\d{2}-\d{2}(\.\w+)?(\.gz)?$", re.ASCII)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.namer = self._gzip_namer
+        self.rotator = self._gzip_rotator
+
+    @staticmethod
+    def _gzip_namer(default_name: str) -> str:
+        return default_name + ".gz"
+
+    @staticmethod
+    def _gzip_rotator(source: str, dest: str) -> None:
+        with open(source, "rb") as f_in:
+            with gzip.open(dest, "wb") as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        os.remove(source)
+
+    def getFilesToDelete(self) -> List[str]:
+        """确定超过 backupCount 的历史文件（含未压缩与 .gz）。"""
+        dir_name, base_name = os.path.split(self.baseFilename)
+        prefix = base_name + "."
+        plen = len(prefix)
+        result = []
+        try:
+            file_names = os.listdir(dir_name)
+        except OSError:
+            return []
+        for file_name in file_names:
+            if file_name[:plen] == prefix:
+                suffix = file_name[plen:]
+                if self._BACKUP_EXT_MATCH.match(suffix):
+                    result.append(os.path.join(dir_name, file_name))
+        if len(result) < self.backupCount:
+            return []
+        result.sort()
+        return result[: len(result) - self.backupCount]
 
 
 class JSONFormatter(logging.Formatter):
@@ -181,80 +226,31 @@ def setup_logging() -> None:
     console_handler.addFilter(context_filter)
     root_logger.addHandler(console_handler)
     
-    # 文件处理器（如果配置了）- 使用按日期轮转的处理器
+    # 文件处理器：按日轮转 + gzip 压缩 + 按 backupCount 保留
     if settings.LOG_FILE_PATH:
         try:
-            # 创建日志目录（如果不存在）
             log_file_path = Path(settings.LOG_FILE_PATH)
             log_file_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # 获取今天的日期（在检查文件之前）
-            today = date.today()
-            
-            # 检查日志文件是否存在，如果存在且是昨天的，先进行轮转
-            # 这样可以确保服务重启时，昨天的日志文件会被正确轮转
-            if log_file_path.exists():
-                # 获取文件的修改时间
-                file_mtime = os.path.getmtime(str(log_file_path))
-                file_date = date.fromtimestamp(file_mtime)
-                
-                # 如果文件是昨天的或更早的，需要轮转
-                if file_date < today:
-                    # 重命名旧文件，添加日期后缀（使用文件最后修改日期）
-                    old_suffix = file_date.strftime('%Y-%m-%d')
-                    old_file = Path(f"{settings.LOG_FILE_PATH}.{old_suffix}")
-                    
-                    # 只有当目标文件不存在时才重命名，避免覆盖
-                    if not old_file.exists():
-                        try:
-                            log_file_path.rename(old_file)
-                        except Exception as rename_error:
-                            # 如果重命名失败（可能是权限问题），尝试复制后删除
-                            try:
-                                import shutil
-                                shutil.copy2(str(log_file_path), str(old_file))
-                                # 清空原文件而不是删除，避免影响正在运行的进程
-                                log_file_path.write_text('')
-                            except Exception as copy_error:
-                                # 如果都失败了，记录警告但继续
-                                pass
-            
-            # 使用 TimedRotatingFileHandler 实现按日期轮转
-            # when='midnight' 表示每天午夜轮转
-            # backupCount 控制保留的历史日志文件数量
-            file_handler = logging.handlers.TimedRotatingFileHandler(
+
+            file_handler = GzipTimedRotatingFileHandler(
                 filename=settings.LOG_FILE_PATH,
-                when='midnight',  # 每天午夜轮转
-                interval=1,  # 轮转间隔（天）
-                backupCount=settings.LOG_FILE_BACKUP_COUNT,  # 保留的历史文件数量
+                when='midnight',
+                interval=1,
+                backupCount=settings.LOG_FILE_BACKUP_COUNT,
                 encoding='utf-8',
-                delay=False,  # 不延迟打开文件
-                utc=False  # 使用本地时间
+                delay=False,
+                utc=False,
             )
             file_handler.setFormatter(formatter)
             file_handler.addFilter(context_filter)
             root_logger.addHandler(file_handler)
-            
-            # 重要：立即触发一次轮转检查
-            # TimedRotatingFileHandler 的轮转检查是在 emit() 时进行的
-            # 通过调用 doRollover() 来确保立即检查（如果文件是昨天的）
-            try:
-                # 如果文件存在，检查是否需要轮转
-                if log_file_path.exists():
-                    # 获取当前时间和今天的开始时间（午夜）
-                    now = time.time()
-                    today_start = time.mktime(today.timetuple())
-                    file_mtime = os.path.getmtime(str(log_file_path))
-                    
-                    # 如果当前时间已经过了午夜，且文件是昨天的，触发轮转
-                    if now >= today_start and file_mtime < today_start:
-                        # 手动触发轮转
-                        file_handler.doRollover()
-            except Exception:
-                # 忽略错误，TimedRotatingFileHandler 会在第一次写入时自动检查
-                pass
+
+            # 启动时若当前日志仍是跨日之前的内容，走 handler 轮转（含 gzip）
+            if log_file_path.exists():
+                today_start = time.mktime(date.today().timetuple())
+                if os.path.getmtime(str(log_file_path)) < today_start:
+                    file_handler.doRollover()
         except Exception as e:
-            # 如果文件日志设置失败，记录警告但不影响程序运行
             logging.getLogger(__name__).warning(
                 f"文件日志设置失败: {e}",
                 extra={'extra_data': {'error': str(e)}}
@@ -272,38 +268,6 @@ def setup_logging() -> None:
         'log_format': settings.LOG_FORMAT,
         'log_file': settings.LOG_FILE_PATH or 'console only'
     })
-
-
-def setup_file_logging(formatter: logging.Formatter, context_filter: ContextFilter) -> None:
-    """设置文件日志处理器"""
-    try:
-        # 创建日志目录
-        log_file_path = Path(settings.LOG_FILE_PATH)
-        log_file_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # 解析文件大小
-        max_bytes = parse_file_size(settings.LOG_FILE_MAX_SIZE)
-        
-        # 创建轮转文件处理器
-        file_handler = logging.handlers.RotatingFileHandler(
-            filename=settings.LOG_FILE_PATH,
-            maxBytes=max_bytes,
-            backupCount=settings.LOG_FILE_BACKUP_COUNT,
-            encoding='utf-8'
-        )
-        
-        file_handler.setFormatter(formatter)
-        file_handler.addFilter(context_filter)
-        
-        # 添加到根日志记录器
-        logging.getLogger().addHandler(file_handler)
-        
-    except Exception as e:
-        # 如果文件日志设置失败，记录警告但不影响程序运行
-        logging.getLogger(__name__).warning(
-            f"文件日志设置失败: {e}",
-            extra={'extra_data': {'error': str(e)}}
-        )
 
 
 def setup_third_party_logging() -> None:
@@ -343,21 +307,6 @@ def setup_third_party_logging() -> None:
     else:
         # 生产环境下关闭SQL语句日志
         logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
-
-
-def parse_file_size(size_str: str) -> int:
-    """解析文件大小字符串，如 '100MB', '1GB' 等"""
-    size_str = size_str.upper().strip()
-    
-    if size_str.endswith('KB'):
-        return int(float(size_str[:-2]) * 1024)
-    elif size_str.endswith('MB'):
-        return int(float(size_str[:-2]) * 1024 * 1024)
-    elif size_str.endswith('GB'):
-        return int(float(size_str[:-2]) * 1024 * 1024 * 1024)
-    else:
-        # 默认按字节处理
-        return int(size_str)
 
 
 def get_logger(name: str) -> logging.Logger:

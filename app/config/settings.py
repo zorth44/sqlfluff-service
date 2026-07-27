@@ -66,8 +66,10 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field(default="INFO", description="日志级别")
     LOG_FORMAT: str = Field(default="json", description="日志格式: json/text")
     LOG_FILE_PATH: Optional[str] = Field(default=None, description="日志文件路径")
-    LOG_FILE_MAX_SIZE: str = Field(default="100MB", description="日志文件最大大小")
-    LOG_FILE_BACKUP_COUNT: int = Field(default=5, description="日志文件备份数量")
+    LOG_FILE_BACKUP_COUNT: int = Field(
+        default=14,
+        description="按日轮转后保留的历史日志天数（含 gzip 压缩文件）",
+    )
     
     # ============= Web服务配置 =============
     WEB_HOST: str = Field(default="0.0.0.0", description="Web服务绑定主机")

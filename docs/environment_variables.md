@@ -72,9 +72,10 @@ CONSUL_HEALTH_CHECK_INTERVAL=10s
 LOG_LEVEL=INFO                     # 日志级别
 LOG_FORMAT=json                    # 日志格式: json/text
 LOG_FILE_PATH=/var/log/sql-linting.log
-LOG_FILE_MAX_SIZE=100MB
-LOG_FILE_BACKUP_COUNT=5
+LOG_FILE_BACKUP_COUNT=14           # 按日轮转后保留天数（进程内 gzip 压缩历史日志）
 ```
+
+日志由服务进程内管理：每天午夜轮转当前文件为 `*.YYYY-MM-DD.gz`，并自动删除超过 `LOG_FILE_BACKUP_COUNT` 的历史文件。无需外挂 cron / cleanup 脚本。
 
 ### Web服务配置
 ```bash

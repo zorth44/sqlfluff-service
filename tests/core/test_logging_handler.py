@@ -1,0 +1,127 @@
+"""GzipTimedRotatingFileHandler 轮转 / 压缩 / 保留策略测试。"""
+
+import gzip
+import logging
+import os
+import tempfile
+from datetime import date, timedelta
+from pathlib import Path
+
+import pytest
+
+# settings 要求 NFS_SHARE_ROOT_PATH；在导入 logging 模块前兜底
+os.environ.setdefault("NFS_SHARE_ROOT_PATH", tempfile.mkdtemp(prefix="sqlfluff-test-nfs-"))
+
+from app.core.logging import GzipTimedRotatingFileHandler  # noqa: E402
+
+
+@pytest.fixture
+def log_dir(tmp_path):
+    return tmp_path
+
+
+def _write_and_close(handler: GzipTimedRotatingFileHandler, message: str) -> None:
+    record = logging.LogRecord(
+        name="test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg=message,
+        args=(),
+        exc_info=None,
+    )
+    handler.emit(record)
+    handler.flush()
+
+
+def test_rollover_creates_gzip(log_dir):
+    log_path = log_dir / "app.log"
+    handler = GzipTimedRotatingFileHandler(
+        filename=str(log_path),
+        when="midnight",
+        interval=1,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    try:
+        _write_and_close(handler, "before rollover")
+        handler.doRollover()
+
+        gz_files = sorted(log_dir.glob("app.log.*.gz"))
+        assert len(gz_files) == 1
+        assert not any(p.suffix == ".log" and p.name != "app.log" for p in log_dir.iterdir())
+
+        with gzip.open(gz_files[0], "rt", encoding="utf-8") as f:
+            content = f.read()
+        assert "before rollover" in content
+        assert log_path.exists()
+    finally:
+        handler.close()
+
+
+def test_backup_count_deletes_oldest_gzip(log_dir):
+    log_path = log_dir / "app.log"
+    backup_count = 3
+    handler = GzipTimedRotatingFileHandler(
+        filename=str(log_path),
+        when="midnight",
+        interval=1,
+        backupCount=backup_count,
+        encoding="utf-8",
+    )
+    try:
+        # 预置超过保留天数的历史 .gz（含一个未压缩旧文件，验证兼容）
+        today = date.today()
+        for i in range(1, 6):
+            day = today - timedelta(days=i)
+            suffix = day.strftime("%Y-%m-%d")
+            if i == 5:
+                # 最旧：未压缩，应一并纳入清理
+                (log_dir / f"app.log.{suffix}").write_text(f"old-{i}\n", encoding="utf-8")
+            else:
+                gz_path = log_dir / f"app.log.{suffix}.gz"
+                with gzip.open(gz_path, "wt", encoding="utf-8") as f:
+                    f.write(f"old-{i}\n")
+
+        _write_and_close(handler, "current")
+        handler.doRollover()
+
+        # 轮转后又产生 1 个今天的 .gz；总数应不超过 backupCount
+        archived = [
+            p for p in log_dir.iterdir()
+            if p.name.startswith("app.log.") and p.name != "app.log"
+        ]
+        assert len(archived) <= backup_count
+
+        # 最旧的未压缩文件应被删掉
+        oldest = today - timedelta(days=5)
+        assert not (log_dir / f"app.log.{oldest.strftime('%Y-%m-%d')}").exists()
+    finally:
+        handler.close()
+
+
+def test_get_files_to_delete_respects_backup_count(log_dir):
+    log_path = log_dir / "app.log"
+    log_path.write_text("seed\n", encoding="utf-8")
+    handler = GzipTimedRotatingFileHandler(
+        filename=str(log_path),
+        when="midnight",
+        interval=1,
+        backupCount=2,
+        encoding="utf-8",
+    )
+    try:
+        today = date.today()
+        for i in range(1, 5):
+            day = today - timedelta(days=i)
+            gz_path = log_dir / f"app.log.{day.strftime('%Y-%m-%d')}.gz"
+            with gzip.open(gz_path, "wt", encoding="utf-8") as f:
+                f.write(f"day-{i}\n")
+
+        to_delete = handler.getFilesToDelete()
+        assert len(to_delete) == 2  # 4 个历史 - 保留 2 = 删 2
+        # 删除的应是更旧的（字典序即日期序）
+        deleted_names = sorted(Path(p).name for p in to_delete)
+        assert deleted_names[0] < deleted_names[1]
+    finally:
+        handler.close()
