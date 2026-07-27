@@ -146,6 +146,13 @@ class PerformanceLogger:
         )
 
 
+def create_formatter() -> logging.Formatter:
+    """根据 LOG_FORMAT 配置创建格式化器"""
+    if settings.LOG_FORMAT.lower() == "text":
+        return TextFormatter()
+    return JSONFormatter()
+
+
 def setup_logging() -> None:
     """设置日志系统"""
     global _context_filter, _performance_logger
@@ -165,10 +172,12 @@ def setup_logging() -> None:
     # 清除现有处理器
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
+
+    formatter = create_formatter()
     
     # 控制台处理器
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(JSONFormatter())
+    console_handler.setFormatter(formatter)
     console_handler.addFilter(context_filter)
     root_logger.addHandler(console_handler)
     
@@ -222,7 +231,7 @@ def setup_logging() -> None:
                 delay=False,  # 不延迟打开文件
                 utc=False  # 使用本地时间
             )
-            file_handler.setFormatter(JSONFormatter())
+            file_handler.setFormatter(formatter)
             file_handler.addFilter(context_filter)
             root_logger.addHandler(file_handler)
             
@@ -260,6 +269,7 @@ def setup_logging() -> None:
     
     logging.info("Logging system initialized", extra={
         'log_level': settings.LOG_LEVEL,
+        'log_format': settings.LOG_FORMAT,
         'log_file': settings.LOG_FILE_PATH or 'console only'
     })
 
