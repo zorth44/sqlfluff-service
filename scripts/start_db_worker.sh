@@ -9,6 +9,7 @@
 #   WORKER_ZOMBIE_TIMEOUT   Worker 心跳超时秒数（默认 600）
 #   WORKER_TASK_TIMEOUT     单任务超时秒数（默认 1800）
 #   WORKER_MAX_RETRIES      最大重试次数（默认 3）
+#   SKIP_DB_MIGRATION       设为 1 跳过 Alembic（Worker 默认 1；Web 负责迁移）
 #
 # 必需环境变量:
 #   DATABASE_URL 或 MYSQL_DATABASE_* 系列
@@ -33,11 +34,18 @@ if [ -z "$NFS_SHARE_ROOT_PATH" ]; then
     exit 1
 fi
 
-# 运行数据库迁移
-echo "Running database migrations..."
-cd /app
-python -m alembic upgrade head
+export PROCESS_ROLE="${PROCESS_ROLE:-worker}"
+
+# Worker 默认跳过迁移（Web 或 migrate 服务负责 schema）
+if [ "${SKIP_DB_MIGRATION:-1}" != "1" ]; then
+    echo "Running database migrations..."
+    cd /app
+    python -m alembic upgrade head
+else
+    echo "Skipping database migrations (SKIP_DB_MIGRATION=${SKIP_DB_MIGRATION:-1})"
+fi
 
 # 启动 Worker
-echo "Starting worker process..."
+echo "Starting worker process (PROCESS_ROLE=$PROCESS_ROLE)..."
+cd /app
 exec python -m app.worker.run_worker

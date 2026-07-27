@@ -217,6 +217,67 @@ class FileManager:
         """
         json_content = json.dumps(data, ensure_ascii=ensure_ascii, indent=2, default=str)
         return self.write_text_file(relative_path, json_content)
+
+    def write_json_file_atomic(
+        self,
+        relative_path: str,
+        data: Any,
+        ensure_ascii: bool = False,
+    ) -> Path:
+        """Atomically write JSON via temp file + os.replace."""
+        json_content = json.dumps(
+            data, ensure_ascii=ensure_ascii, indent=2, default=str
+        )
+        file_path = self.get_absolute_path(relative_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = file_path.with_suffix(file_path.suffix + ".tmp")
+        try:
+            tmp_path.write_text(json_content, encoding="utf-8")
+            os.replace(tmp_path, file_path)
+            file_logger.debug(
+                f"Atomically wrote JSON: {file_path}, size: {len(json_content)} chars"
+            )
+            return file_path
+        except Exception as e:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+            raise FileException("写入", str(file_path), str(e))
+
+    def cleanup_stale_result_files(
+        self,
+        job_id: str,
+        task_id: str,
+        keep_path: str,
+    ) -> int:
+        """
+        Delete stale versioned result files for a task, keeping keep_path.
+
+        Returns:
+            Number of files removed.
+        """
+        task_dir = self.get_absolute_path(f"results/{job_id}/{task_id}")
+        if not task_dir.is_dir():
+            return 0
+
+        keep_abs = self.get_absolute_path(keep_path)
+        removed = 0
+        for entry in task_dir.iterdir():
+            if not entry.is_file():
+                continue
+            if entry.resolve() == keep_abs.resolve():
+                continue
+            if entry.suffix not in (".json", ".tmp"):
+                continue
+            try:
+                entry.unlink()
+                removed += 1
+                file_logger.debug(f"Removed stale result file: {entry}")
+            except OSError as e:
+                file_logger.warning(f"Failed to remove stale result file {entry}: {e}")
+        return removed
     
     def read_json_file(self, relative_path: str) -> Any:
         """读取JSON文件

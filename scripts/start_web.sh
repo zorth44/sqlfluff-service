@@ -150,7 +150,7 @@ start_web_service() {
     log_info "  端口: $port"
     log_info "  环境: $environment"
     
-    if [[ "$environment" == "production" ]]; then
+    if [[ "$environment" == "production" || "$environment" == "prod" ]]; then
         log_info "使用Gunicorn启动生产环境服务..."
         log_info "  Worker数量: $workers"
         

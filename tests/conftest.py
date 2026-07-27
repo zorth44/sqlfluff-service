@@ -1,3 +1,9 @@
+import os
+
+os.environ.setdefault("NFS_SHARE_ROOT_PATH", "/tmp/sqlfluff_test_nfs")
+os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
+os.environ.setdefault("ENVIRONMENT", "dev")
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

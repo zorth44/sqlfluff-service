@@ -38,7 +38,8 @@ services:
     environment:
       - DATABASE_URL=mysql+pymysql://sqlfluff_user:sqlfluff_password@mysql:3306/sqlfluff
       - NFS_SHARE_ROOT_PATH=/mnt/nfs_share/sql_linting
-      - ENVIRONMENT=production
+      - ENVIRONMENT=prod
+      - PROCESS_ROLE=web
       - PORT=8000
       - GUNICORN_WORKERS=4
       - CONSUL_HOST=consul
@@ -58,26 +59,28 @@ services:
       start_period: 40s
 
   # Worker服务（DB-as-Queue）
+  # 水平扩展: docker compose up --scale worker=3
   worker:
     build: .
-    container_name: sqlfluff-worker
     environment:
       - DATABASE_URL=mysql+pymysql://sqlfluff_user:sqlfluff_password@mysql:3306/sqlfluff
       - NFS_SHARE_ROOT_PATH=/mnt/nfs_share/sql_linting
+      - PROCESS_ROLE=worker
       - WORKER_CONCURRENCY=4
       - WORKER_POLL_INTERVAL=2.0
       - WORKER_HEARTBEAT_INTERVAL=30
       - WORKER_ZOMBIE_TIMEOUT=600
       - WORKER_TASK_TIMEOUT=1800
       - WORKER_MAX_RETRIES=3
+      - SKIP_DB_MIGRATION=1
     volumes:
       - nfs_share:/mnt/nfs_share
     depends_on:
       mysql:
         condition: service_healthy
+      web:
+        condition: service_started
     command: ./scripts/start_db_worker.sh
-    deploy:
-      replicas: 2
 
   # Consul服务发现
   consul:

@@ -57,8 +57,9 @@ async def health_check(db: Session = Depends(get_db)):
     try:
         logger.debug("检查Worker状态")
         from app.models.database import WorkerRegistry
-        from datetime import datetime, timedelta
-        cutoff = datetime.utcnow() - timedelta(seconds=60)
+        from datetime import timedelta
+        worker_active_threshold = settings.WORKER_HEARTBEAT_INTERVAL * 3
+        cutoff = datetime.utcnow() - timedelta(seconds=worker_active_threshold)
         active_workers = db.query(WorkerRegistry).filter(
             WorkerRegistry.status == 'RUNNING',
             WorkerRegistry.heartbeat_at >= cutoff
@@ -244,26 +245,77 @@ async def health_check(db: Session = Depends(get_db)):
             ]
         })
     
-    # 如果有任何检查失败，返回503状态码
-    if health_status["status"] != "healthy":
+    if health_status["status"] == "unhealthy":
         logger.warning("健康检查失败，存在不健康的依赖服务")
-        return HTTPException(
+        raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=health_status
         )
-    
+
     logger.info("健康检查通过")
     return health_status
 
 
 @router.get("/health/ready")
-async def readiness_check():
-    """轻量级就绪检查 - 快速响应"""
+async def readiness_check(db: Session = Depends(get_db)):
+    """轻量级就绪检查 - 验证数据库可用（不检查 Worker）"""
+    checks: Dict[str, Any] = {}
+
+    try:
+        db.execute(text("SELECT 1"))
+        checks["database"] = {
+            "status": "healthy",
+            "message": "数据库连接正常",
+            "checked_at": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"就绪检查数据库失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "status": "not_ready",
+                "timestamp": datetime.utcnow().isoformat(),
+                "service": "sql-linting-service",
+                "version": "1.0.0",
+                "checks": {
+                    "database": {
+                        "status": "unhealthy",
+                        "message": f"数据库连接失败: {str(e)}",
+                        "checked_at": datetime.utcnow().isoformat(),
+                    }
+                },
+            },
+        )
+
+    try:
+        nfs_root = settings.NFS_SHARE_ROOT_PATH
+        if os.path.exists(nfs_root):
+            checks["nfs"] = {
+                "status": "healthy",
+                "message": "NFS路径可访问",
+                "path": nfs_root,
+                "checked_at": datetime.utcnow().isoformat(),
+            }
+        else:
+            checks["nfs"] = {
+                "status": "warning",
+                "message": f"NFS路径不存在: {nfs_root}",
+                "path": nfs_root,
+                "checked_at": datetime.utcnow().isoformat(),
+            }
+    except Exception as e:
+        checks["nfs"] = {
+            "status": "warning",
+            "message": f"NFS检查失败: {str(e)}",
+            "checked_at": datetime.utcnow().isoformat(),
+        }
+
     return {
         "status": "ready",
         "timestamp": datetime.utcnow().isoformat(),
         "service": "sql-linting-service",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "checks": checks,
     }
 
 
@@ -279,10 +331,14 @@ async def liveness_check():
 
 
 @router.get("/health/metrics")
-async def metrics_endpoint():
+async def metrics_endpoint(db: Session = Depends(get_db)):
     """Prometheus指标端点"""
     try:
-        from app.core.metrics import get_metrics
+        from app.core.metrics import get_metrics, collect_queue_gauges
+        collect_queue_gauges(
+            db,
+            worker_heartbeat_seconds=settings.WORKER_HEARTBEAT_INTERVAL * 3,
+        )
         return get_metrics()
     except ImportError:
         return {"error": "Metrics not available"}
@@ -374,7 +430,13 @@ async def quick_health_check(db: Session = Depends(get_db)):
             "message": f"数据库连接失败: {str(e)}"
         }
         health_status["status"] = "unhealthy"
-    
+
+    if health_status["status"] == "unhealthy":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=health_status
+        )
+
     return health_status
 
 # 添加最简单的健康检查端点

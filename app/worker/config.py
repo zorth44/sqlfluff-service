@@ -33,12 +33,12 @@ class WorkerConfig:
         default_factory=lambda: int(os.getenv('WORKER_ZOMBIE_TIMEOUT', '600'))
     )
 
-    # 单任务超时（秒）- IN_PROGRESS 超过此时长将被回收（覆盖卡住的任务）
+    # 单任务超时（秒）- 保留兼容，租约回收以 lease_expires_at 为准
     task_timeout: int = field(
         default_factory=lambda: int(os.getenv('WORKER_TASK_TIMEOUT', '1800'))
     )
 
-    # 僵尸扫描间隔（秒）
+    # 过期租约扫描间隔（秒）
     zombie_sweep_interval: int = field(
         default_factory=lambda: int(os.getenv('WORKER_ZOMBIE_SWEEP_INTERVAL', '120'))
     )
@@ -46,4 +46,29 @@ class WorkerConfig:
     # 最大重试次数
     max_retries: int = field(
         default_factory=lambda: int(os.getenv('WORKER_MAX_RETRIES', '3'))
+    )
+
+    # 任务租约时长（秒）
+    task_lease_seconds: int = field(
+        default_factory=lambda: int(os.getenv('WORKER_TASK_LEASE_SECONDS', '120'))
+    )
+
+    # 租约续期间隔（秒）
+    lease_renew_interval: int = field(
+        default_factory=lambda: int(os.getenv('WORKER_LEASE_RENEW_INTERVAL', '40'))
+    )
+
+    # 退避上限（秒）
+    max_backoff_seconds: int = field(
+        default_factory=lambda: int(os.getenv('WORKER_MAX_BACKOFF_SECONDS', '300'))
+    )
+
+    # SQLFluff 分析软超时（秒）
+    analyze_soft_timeout: int = field(
+        default_factory=lambda: int(os.getenv('WORKER_ANALYZE_SOFT_TIMEOUT', '600'))
+    )
+
+    # SQLFluff 分析硬超时（秒）
+    analyze_hard_timeout: int = field(
+        default_factory=lambda: int(os.getenv('WORKER_ANALYZE_HARD_TIMEOUT', '900'))
     )

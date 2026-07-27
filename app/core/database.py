@@ -19,14 +19,16 @@ logger = logging.getLogger(__name__)
 
 # 获取配置
 settings = get_settings()
+_pool = settings.get_database_pool_config()
+_process_role = settings.get_process_role()
 
 # 数据库引擎配置
 engine = create_engine(
     settings.get_database_url(),
     # 连接池配置
     poolclass=QueuePool,
-    pool_size=settings.DATABASE_POOL_SIZE,
-    max_overflow=settings.DATABASE_MAX_OVERFLOW,
+    pool_size=_pool["pool_size"],
+    max_overflow=_pool["max_overflow"],
     pool_timeout=settings.DATABASE_POOL_TIMEOUT,
     pool_recycle=settings.DATABASE_POOL_RECYCLE,
     pool_pre_ping=True,  # 启用连接健康检查
@@ -43,6 +45,13 @@ engine = create_engine(
     echo_pool=False,
     # 事务隔离级别 - 使用READ_COMMITTED避免幻读问题
     isolation_level="READ_COMMITTED",
+)
+
+logger.info(
+    "Database engine created (role=%s, pool_size=%s, max_overflow=%s)",
+    _process_role,
+    _pool["pool_size"],
+    _pool["max_overflow"],
 )
 
 # 会话工厂

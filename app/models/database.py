@@ -8,10 +8,15 @@
 from sqlalchemy import Column, Integer, BigInteger, String, Text, DateTime, Enum, ForeignKey, Index, JSON, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from sqlalchemy.dialects.mysql import DATETIME as MYSQL_DATETIME
 from datetime import datetime
 from typing import List, Optional
 
 from app.core.database import Base
+
+
+# MySQL 使用 DATETIME(6)；SQLite 等其它方言回退到普通 DateTime
+DateTime6 = DateTime().with_variant(MYSQL_DATETIME(fsp=6), "mysql")
 
 
 class RuleDefinition(Base):
@@ -58,7 +63,11 @@ class LintingJob(Base):
     )
     
     status = Column(
-        Enum('ACCEPTED', 'PROCESSING', 'COMPLETED', 'PARTIALLY_COMPLETED', 'FAILED', name='job_status_enum'),
+        Enum(
+            'ACCEPTED', 'EXPANDING', 'PROCESSING', 'COMPLETED',
+            'PARTIALLY_COMPLETED', 'FAILED',
+            name='job_status_enum',
+        ),
         nullable=False,
         default='ACCEPTED',
         comment="工作总体状态"
@@ -325,7 +334,51 @@ class LintingTask(Base):
         Integer,
         nullable=False,
         default=0,
-        comment="已重试次数"
+        comment="已重试次数（迁移兼容，与 attempt_count 同步）"
+    )
+
+    lease_token = Column(
+        String(64),
+        nullable=True,
+        comment="任务租约令牌，Worker 持有期间独占处理权"
+    )
+
+    lease_expires_at = Column(
+        DateTime6,
+        nullable=True,
+        comment="租约过期时间，超时后可被其他 Worker 回收"
+    )
+
+    next_attempt_at = Column(
+        DateTime6,
+        nullable=True,
+        server_default=func.now(),
+        comment="下次可领取时间（退避调度）"
+    )
+
+    attempt_count = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="已尝试次数（含当前进行中的尝试）"
+    )
+
+    started_at = Column(
+        DateTime6,
+        nullable=True,
+        comment="当前/最近一次开始处理时间"
+    )
+
+    finished_at = Column(
+        DateTime6,
+        nullable=True,
+        comment="任务完成时间（SUCCESS 或 FAILURE）"
+    )
+
+    last_error = Column(
+        Text,
+        nullable=True,
+        comment="最近一次失败/回收原因"
     )
 
     # 时间戳字段
@@ -383,6 +436,13 @@ class LintingTask(Base):
             'claim_id': self.claim_id,
             'claimed_at': self.claimed_at,
             'retry_count': self.retry_count,
+            'lease_token': self.lease_token,
+            'lease_expires_at': self.lease_expires_at,
+            'next_attempt_at': self.next_attempt_at,
+            'attempt_count': self.attempt_count,
+            'started_at': self.started_at,
+            'finished_at': self.finished_at,
+            'last_error': self.last_error,
             'created_at': self.created_at,
             'updated_at': self.updated_at
         }
@@ -424,6 +484,14 @@ Index('idx_job_boc_task_created', LintingJob.boc_task_number, LintingJob.created
 Index('idx_task_job_status', LintingTask.job_id, LintingTask.status)
 Index('idx_task_status_created', LintingTask.status, LintingTask.created_at)
 Index('idx_task_job_created', LintingTask.job_id, LintingTask.created_at)
+Index(
+    'idx_task_lease_claim',
+    LintingTask.status,
+    LintingTask.next_attempt_at,
+    LintingTask.priority,
+    LintingTask.created_at,
+    LintingTask.id,
+)
 
 
 # 数据库约束和验证
@@ -464,7 +532,7 @@ class JobQueryHelper:
     def get_active_jobs(session):
         """获取活跃的Job"""
         return session.query(LintingJob).filter(
-            LintingJob.status.in_(['ACCEPTED', 'PROCESSING'])
+            LintingJob.status.in_(['ACCEPTED', 'EXPANDING', 'PROCESSING'])
         )
     
     @staticmethod
