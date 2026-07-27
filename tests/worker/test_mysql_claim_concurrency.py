@@ -65,6 +65,12 @@ def mysql_engine():
         poolclass=NullPool,
         isolation_level="READ_COMMITTED",
     )
+    # 每次模块级套件重建表，确保模型字段（含新 migration 列）可用
+    with engine.begin() as conn:
+        conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
+        for table in reversed(Base.metadata.sorted_tables):
+            conn.execute(text(f"DROP TABLE IF EXISTS `{table.name}`"))
+        conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
     Base.metadata.create_all(bind=engine)
     yield engine
     engine.dispose()

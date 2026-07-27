@@ -2,12 +2,17 @@
 Run SQLFluff analysis in an isolated child process.
 
 Uses spawn context so the child does not inherit SQLAlchemy connections.
+Large results are written to a temp file to avoid Queue pipe deadlocks.
 """
 
+import json
 import logging
 import multiprocessing as mp
+import os
+import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -35,16 +40,42 @@ def _child_analyze(
     source_file_path: str,
     dialect: Optional[str],
     rules: Optional[List[str]],
-    result_queue: mp.Queue,
+    result_path: str,
 ) -> None:
+    """
+    子进程入口：分析结果写入临时文件，避免大 payload 阻塞 Queue。
+
+    成功时写 JSON: {"ok": true, "result": {...}}
+    失败时写 JSON: {"ok": false, "error": "..."}
+    """
     try:
         from app.services.sqlfluff_service import SQLFluffService
 
         service = SQLFluffService()
         result = service.analyze_sql_file(source_file_path, dialect, rules)
-        result_queue.put({"ok": True, "result": result})
+        payload = {"ok": True, "result": result}
     except Exception as exc:
-        result_queue.put({"ok": False, "error": repr(exc), "exc_type": type(exc).__name__})
+        payload = {
+            "ok": False,
+            "error": repr(exc),
+            "exc_type": type(exc).__name__,
+        }
+
+    tmp_path = f"{result_path}.partial"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, default=str)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, result_path)
+    except Exception:
+        # 尽量清理半截文件
+        for path in (tmp_path, result_path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        raise
 
 
 def run_analyze_in_process(
@@ -58,20 +89,8 @@ def run_analyze_in_process(
     """
     Run SQLFluff analysis in a spawned subprocess with soft/hard timeouts.
 
-    Args:
-        source_file_path: Relative or absolute SQL file path
-        dialect: SQL dialect
-        rules: Optional rule list
-        soft_timeout: Seconds before terminate() is sent
-        hard_timeout: Total seconds before kill() if still running
-        concurrency: Max concurrent analyze processes (semaphore size)
-
-    Returns:
-        Analysis result dict from SQLFluffService
-
-    Raises:
-        TimeoutError: Process exceeded hard timeout
-        RuntimeError: Child process failed
+    Large results are exchanged via a temporary file (not Queue body),
+    so join() cannot deadlock on a full pipe buffer.
     """
     sem = _get_analyze_semaphore(concurrency)
     sem.acquire()
@@ -94,15 +113,22 @@ def _run_analyze_subprocess(
     soft_timeout: float,
     hard_timeout: float,
 ) -> Dict[str, Any]:
+    fd, result_path = tempfile.mkstemp(prefix="sqlfluff_analyze_", suffix=".json")
+    os.close(fd)
+    # 子进程用 os.replace 写入；先删掉空文件避免读到半截
+    os.unlink(result_path)
+
     ctx = mp.get_context("spawn")
-    result_queue: mp.Queue = ctx.Queue()
     proc = ctx.Process(
         target=_child_analyze,
-        args=(source_file_path, dialect, rules, result_queue),
+        args=(source_file_path, dialect, rules, result_path),
         daemon=True,
     )
     proc.start()
-    proc.join(timeout=soft_timeout)
+
+    deadline = time.monotonic() + soft_timeout
+    while proc.is_alive() and time.monotonic() < deadline:
+        proc.join(timeout=0.2)
 
     if proc.is_alive():
         logger.warning(
@@ -122,29 +148,37 @@ def _run_analyze_subprocess(
         )
         proc.kill()
         proc.join(timeout=5)
+        _cleanup_result_file(result_path)
         raise TimeoutError(
             f"SQLFluff analysis exceeded hard timeout ({hard_timeout}s)"
         )
 
-    if proc.exitcode not in (0, None) and not _queue_has_item(result_queue):
-        raise RuntimeError(
-            f"Analyze process exited with code {proc.exitcode}"
-        )
-
     try:
-        payload = result_queue.get(timeout=1)
-    except Exception as exc:
+        payload = _read_result_file(result_path)
+    except FileNotFoundError as exc:
         raise RuntimeError(
             f"Analyze process produced no result (exitcode={proc.exitcode})"
         ) from exc
+    finally:
+        _cleanup_result_file(result_path)
 
     if payload.get("ok"):
         return payload["result"]
 
     raise RuntimeError(payload.get("error", "Analyze process failed"))
 
-def _queue_has_item(queue: mp.Queue) -> bool:
-    try:
-        return not queue.empty()
-    except Exception:
-        return False
+
+def _read_result_file(result_path: str) -> Dict[str, Any]:
+    path = Path(result_path)
+    if not path.exists():
+        raise FileNotFoundError(result_path)
+    with path.open("r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _cleanup_result_file(result_path: str) -> None:
+    for path in (result_path, f"{result_path}.partial"):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass

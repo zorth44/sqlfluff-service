@@ -71,6 +71,16 @@ class Settings(BaseSettings):
     WORKER_MAX_BACKOFF_SECONDS: int = Field(default=300, description="退避上限(秒)", env="WORKER_MAX_BACKOFF_SECONDS")
     WORKER_ANALYZE_SOFT_TIMEOUT: int = Field(default=600, description="分析软超时(秒)", env="WORKER_ANALYZE_SOFT_TIMEOUT")
     WORKER_ANALYZE_HARD_TIMEOUT: int = Field(default=900, description="分析硬超时(秒)", env="WORKER_ANALYZE_HARD_TIMEOUT")
+    WORKER_JOB_EXPANSION_LEASE_SECONDS: int = Field(
+        default=600,
+        description="Job 展开租约时长(秒)",
+        env="WORKER_JOB_EXPANSION_LEASE_SECONDS",
+    )
+    WORKER_JOB_EXPANSION_POLL_INTERVAL: float = Field(
+        default=2.0,
+        description="Job 展开轮询间隔(秒)",
+        env="WORKER_JOB_EXPANSION_POLL_INTERVAL",
+    )
     
     # ============= NFS共享目录配置 =============
     NFS_SHARE_ROOT_PATH: str = Field(
@@ -232,6 +242,8 @@ class Settings(BaseSettings):
             'max_backoff_seconds': self.WORKER_MAX_BACKOFF_SECONDS,
             'analyze_soft_timeout': self.WORKER_ANALYZE_SOFT_TIMEOUT,
             'analyze_hard_timeout': self.WORKER_ANALYZE_HARD_TIMEOUT,
+            'job_expansion_lease_seconds': self.WORKER_JOB_EXPANSION_LEASE_SECONDS,
+            'job_expansion_poll_interval': self.WORKER_JOB_EXPANSION_POLL_INTERVAL,
         }
 
     def get_process_role(self) -> str:

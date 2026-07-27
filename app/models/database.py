@@ -131,6 +131,23 @@ class LintingJob(Base):
         nullable=True,
         comment="工作级别的错误信息（如解压失败）"
     )
+
+    # Job 展开租约（防止 EXPANDING 崩溃后永久卡住）
+    expansion_lease_token = Column(
+        String(64),
+        nullable=True,
+        comment="Job 展开租约令牌"
+    )
+    expansion_lease_expires_at = Column(
+        DateTime6,
+        nullable=True,
+        comment="Job 展开租约过期时间"
+    )
+    expansion_started_at = Column(
+        DateTime6,
+        nullable=True,
+        comment="Job 展开开始时间"
+    )
     
     # 时间戳字段
     created_at = Column(
@@ -174,6 +191,9 @@ class LintingJob(Base):
             'boc_task_number': self.boc_task_number,
             'rules': self.rules,
             'error_message': self.error_message,
+            'expansion_lease_token': self.expansion_lease_token,
+            'expansion_lease_expires_at': self.expansion_lease_expires_at,
+            'expansion_started_at': self.expansion_started_at,
             'created_at': self.created_at,
             'updated_at': self.updated_at
         }

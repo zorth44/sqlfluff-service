@@ -35,7 +35,10 @@ from app.models.database import LintingTask, LintingJob, WorkerRegistry
 from app.schemas.common import TaskStatusEnum, JobStatusEnum
 from app.worker.config import WorkerConfig
 from app.worker.retry import compute_backoff_seconds
-from app.worker.job_processor import try_expand_one_job
+from app.worker.job_processor import (
+    try_expand_one_job,
+    reclaim_expired_job_expansions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -370,13 +373,9 @@ def _process_with_lease_renewal(ctx: WorkerContext, claimed: ClaimedTask) -> boo
 
 class WorkerThread(threading.Thread):
     """
-    Worker 线程：循环领取并处理任务
+    Worker 线程：循环领取并处理 SQL 任务
 
-    每个线程独立运行 claim → process 循环：
-    1. 从 DB 原子领取一个 PENDING 任务
-    2. 续租并调用 process_task_safe 执行 SQLFluff 分析
-    3. 处理完成后更新 task/job 状态
-    4. 无任务时等待 poll_interval 秒后重试
+    Job 展开由独立的 JobExpansionThread 负责，避免 Task 流量饿死展开队列。
     """
 
     def __init__(self, ctx: WorkerContext, thread_id: int):
@@ -414,17 +413,7 @@ class WorkerThread(threading.Thread):
                         except ImportError:
                             pass
                 else:
-                    expanded = False
-                    with managed_db_session() as db:
-                        result = try_expand_one_job(db)
-                        if result and result.get("status") == "success":
-                            expanded = True
-                            logger.debug(
-                                f"Thread {self.thread_id} expanded job "
-                                f"{result.get('job_id')}"
-                            )
-                    if not expanded:
-                        time.sleep(self.ctx.config.poll_interval)
+                    time.sleep(self.ctx.config.poll_interval)
 
             except Exception as e:
                 logger.error(
@@ -436,6 +425,54 @@ class WorkerThread(threading.Thread):
         logger.info(
             f"Worker thread {self.thread_id} stopped "
             f"(processed: {self.tasks_processed})"
+        )
+
+
+# ───────────────────── Job Expansion Thread ─────────────────────
+
+class JobExpansionThread(threading.Thread):
+    """
+    独立展开线程：持续领取 ACCEPTED Job 并展开，不受 Task 队列影响。
+    """
+
+    def __init__(self, ctx: WorkerContext):
+        super().__init__(daemon=True, name="job-expansion-thread")
+        self.ctx = ctx
+        self.jobs_expanded = 0
+
+    def run(self):
+        logger.info(
+            "Job expansion thread started "
+            f"(poll={self.ctx.config.job_expansion_poll_interval}s, "
+            f"lease={self.ctx.config.job_expansion_lease_seconds}s)"
+        )
+        while self.ctx.running:
+            try:
+                expanded = False
+                with managed_db_session() as db:
+                    result = try_expand_one_job(db)
+                    if result and result.get("status") in (
+                        "success",
+                        "skipped",
+                    ):
+                        expanded = True
+                        if result.get("status") == "success":
+                            self.jobs_expanded += 1
+                            logger.debug(
+                                "Expanded job %s (total=%d)",
+                                result.get("job_id"),
+                                self.jobs_expanded,
+                            )
+                if not expanded:
+                    time.sleep(self.ctx.config.job_expansion_poll_interval)
+            except Exception as e:
+                logger.error("Job expansion thread error: %s", e, exc_info=True)
+                time.sleep(
+                    min(self.ctx.config.job_expansion_poll_interval * 2, 10)
+                )
+
+        logger.info(
+            "Job expansion thread stopped (expanded=%d)", self.jobs_expanded
         )
 
 
@@ -518,7 +555,9 @@ class HeartbeatThread(threading.Thread):
 
 class LeaseSweepThread(threading.Thread):
     """
-    过期租约回收线程：定期回收 lease_expires_at 已过期的 IN_PROGRESS 任务
+    过期租约回收线程：
+    - 回收 lease_expires_at 已过期的 IN_PROGRESS 任务
+    - 回收 expansion_lease_expires_at 已过期的 EXPANDING Job
     """
 
     def __init__(self, ctx: WorkerContext):
@@ -529,6 +568,8 @@ class LeaseSweepThread(threading.Thread):
         logger.info(
             f"Lease sweep thread started "
             f"(lease_seconds: {self.ctx.config.task_lease_seconds}s, "
+            f"job_expansion_lease: "
+            f"{self.ctx.config.job_expansion_lease_seconds}s, "
             f"interval: {self.ctx.config.zombie_sweep_interval}s, "
             f"max_retries: {self.ctx.config.max_retries})"
         )
@@ -537,9 +578,16 @@ class LeaseSweepThread(threading.Thread):
             time.sleep(self.ctx.config.zombie_sweep_interval)
             try:
                 with managed_db_session() as db:
-                    count = reclaim_expired_leases(db, self.ctx.config)
-                if count > 0:
-                    logger.warning(f"Reclaimed {count} expired lease tasks")
+                    task_count = reclaim_expired_leases(db, self.ctx.config)
+                    job_count = reclaim_expired_job_expansions(
+                        db, self.ctx.config
+                    )
+                if task_count > 0:
+                    logger.warning(f"Reclaimed {task_count} expired lease tasks")
+                if job_count > 0:
+                    logger.warning(
+                        f"Reclaimed {job_count} expired EXPANDING jobs"
+                    )
             except Exception as e:
                 logger.error(f"Lease sweep failed: {e}", exc_info=True)
 
@@ -580,8 +628,10 @@ def start_worker(config: Optional[WorkerConfig] = None):
 
     heartbeat = HeartbeatThread(ctx)
     lease_sweeper = LeaseSweepThread(ctx)
+    job_expander = JobExpansionThread(ctx)
     heartbeat.start()
     lease_sweeper.start()
+    job_expander.start()
 
     worker_threads = []
     for i in range(config.concurrency):

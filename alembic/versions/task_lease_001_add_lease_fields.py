@@ -131,6 +131,17 @@ def downgrade() -> None:
         ['status', sa.text('priority DESC'), 'created_at'],
     )
 
+    # 移除 EXPANDING 枚举前先转换现存记录，避免 ALTER ENUM 失败
+    op.execute("""
+        UPDATE linting_jobs
+        SET status = 'ACCEPTED',
+            error_message = COALESCE(
+                error_message,
+                'Converted from EXPANDING during migration downgrade'
+            )
+        WHERE status = 'EXPANDING'
+    """)
+
     op.execute("""
         ALTER TABLE linting_jobs
         MODIFY COLUMN status ENUM(

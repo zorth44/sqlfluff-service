@@ -2,21 +2,24 @@
 Job 处理器
 
 负责 Worker 侧 Job 展开：ZIP 解压、文件夹遍历、创建 PENDING Tasks。
-Task 创建后由 claim_task() 自动领取处理。
+展开过程带租约，崩溃后可由 sweeper 回收回 ACCEPTED。
 """
 
 import os
 import time
-import tempfile
+import uuid
 import logging
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.database import LintingJob, LintingTask
 from app.utils.file_utils import FileManager
 from app.utils.uuid_utils import generate_task_id
 from app.schemas.common import JobStatusEnum, TaskStatusEnum, SubmissionTypeEnum
+from app.worker.config import WorkerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +32,31 @@ class JobExpansionError(Exception):
         self.permanent = permanent
 
 
+def _clear_expansion_lease(job: LintingJob) -> None:
+    job.expansion_lease_token = None
+    job.expansion_lease_expires_at = None
+    job.expansion_started_at = None
+
+
 # ───────────────────── Claim ─────────────────────
 
-def claim_job_for_expansion(db: Session) -> Optional[LintingJob]:
+def claim_job_for_expansion(
+    db: Session,
+    lease_seconds: Optional[int] = None,
+) -> Optional[LintingJob]:
     """
     原子领取一个 ACCEPTED Job 用于展开（ACCEPTED → EXPANDING）。
 
-    使用 FOR UPDATE SKIP LOCKED，仅一个 Worker 能成功领取。
+    使用 FOR UPDATE SKIP LOCKED，仅一个 Worker 能成功领取，并签发展开租约。
     """
+    if lease_seconds is None:
+        lease_seconds = WorkerConfig().job_expansion_lease_seconds
+
+    try:
+        now = db.execute(select(func.now())).scalar() or datetime.utcnow()
+    except Exception:
+        now = datetime.utcnow()
+
     job = (
         db.query(LintingJob)
         .filter(LintingJob.status == JobStatusEnum.ACCEPTED)
@@ -48,9 +68,53 @@ def claim_job_for_expansion(db: Session) -> Optional[LintingJob]:
         return None
 
     job.status = JobStatusEnum.EXPANDING
+    job.expansion_lease_token = uuid.uuid4().hex
+    job.expansion_lease_expires_at = now + timedelta(seconds=lease_seconds)
+    job.expansion_started_at = now
+    job.error_message = None
     db.flush()
     logger.info("Claimed job %s for expansion", job.job_id)
     return job
+
+
+def reclaim_expired_job_expansions(
+    db: Session,
+    config: Optional[WorkerConfig] = None,
+) -> int:
+    """
+    回收过期的 EXPANDING Job，重置为 ACCEPTED 以便重新展开。
+
+    若已有部分 Task，保留 Task；下次展开会幂等跳过已存在路径。
+    """
+    if config is None:
+        config = WorkerConfig()
+
+    candidates = (
+        db.query(LintingJob)
+        .filter(
+            LintingJob.status == JobStatusEnum.EXPANDING,
+            LintingJob.expansion_lease_expires_at.isnot(None),
+            LintingJob.expansion_lease_expires_at < func.now(),
+        )
+        .with_for_update(skip_locked=True)
+        .all()
+    )
+
+    reclaimed = 0
+    for job in candidates:
+        reason = (
+            f"展开租约过期（expansion_lease_expires_at="
+            f"{job.expansion_lease_expires_at}）"
+        )
+        job.status = JobStatusEnum.ACCEPTED
+        job.error_message = reason
+        _clear_expansion_lease(job)
+        reclaimed += 1
+        logger.warning("Reclaimed stuck EXPANDING job %s: %s", job.job_id, reason)
+
+    if reclaimed:
+        logger.info("Job expansion sweep: %d jobs reset to ACCEPTED", reclaimed)
+    return reclaimed
 
 
 # ───────────────────── Entry Point ─────────────────────
@@ -59,16 +123,22 @@ def process_job_expansion(db: Session, job: LintingJob) -> Dict[str, Any]:
     """
     展开 Job（调用方已通过 claim 将状态置为 EXPANDING）。
 
-    幂等：若已有 Task 且 Job 已在 PROCESSING，跳过；若 EXPANDING 且已有 Task，补全后转 PROCESSING。
+    幂等：若已有 Task 且 Job 已在 PROCESSING，跳过；
+    若 EXPANDING 且已有 Task，补全后转 PROCESSING。
     """
     start = time.monotonic()
     job_id = job.job_id
+    lease_token = job.expansion_lease_token
 
     try:
         try:
             from app.core.metrics import record_job_expansion_duration
         except ImportError:
             record_job_expansion_duration = None
+
+        # 展开期间续租一次（短任务足够；长 ZIP 由 lease 时长覆盖）
+        if lease_token:
+            _renew_expansion_lease(db, job_id, lease_token)
 
         existing_count = (
             db.query(LintingTask)
@@ -85,8 +155,13 @@ def process_job_expansion(db: Session, job: LintingJob) -> Dict[str, Any]:
             }
 
         if existing_count > 0:
-            job.status = JobStatusEnum.PROCESSING
-            db.commit()
+            job = _finish_expansion(db, job_id, lease_token, JobStatusEnum.PROCESSING)
+            if not job:
+                return {
+                    "status": "abandoned",
+                    "job_id": job_id,
+                    "reason": "expansion lease lost",
+                }
             logger.info(
                 "Job %s has %d existing tasks, marked PROCESSING",
                 job_id,
@@ -104,10 +179,13 @@ def process_job_expansion(db: Session, job: LintingJob) -> Dict[str, Any]:
         else:
             task_ids = _handle_archive_job(db, job)
 
-        job = db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
-        if job and job.status != JobStatusEnum.FAILED:
-            job.status = JobStatusEnum.PROCESSING
-            db.commit()
+        job = _finish_expansion(db, job_id, lease_token, JobStatusEnum.PROCESSING)
+        if not job:
+            return {
+                "status": "abandoned",
+                "job_id": job_id,
+                "reason": "expansion lease lost",
+            }
 
         duration = time.monotonic() - start
         if record_job_expansion_duration:
@@ -127,37 +205,108 @@ def process_job_expansion(db: Session, job: LintingJob) -> Dict[str, Any]:
 
     except JobExpansionError as e:
         db.rollback()
-        job = (
-            db.query(LintingJob)
-            .filter(LintingJob.job_id == job_id)
-            .with_for_update()
-            .first()
-        )
-        if job:
-            if e.permanent:
-                job.status = JobStatusEnum.FAILED
-                job.error_message = str(e)
-            else:
-                job.status = JobStatusEnum.ACCEPTED
-                job.error_message = str(e)
-            db.commit()
+        _fail_or_retry_expansion(db, job_id, lease_token, e, permanent=e.permanent)
         logger.error("Job expansion failed for %s: %s", job_id, e)
         return {"status": "failed", "job_id": job_id, "error": str(e)}
 
     except Exception as e:
         db.rollback()
-        job = (
-            db.query(LintingJob)
-            .filter(LintingJob.job_id == job_id)
-            .with_for_update()
-            .first()
-        )
-        if job:
-            job.status = JobStatusEnum.FAILED
-            job.error_message = str(e)
-            db.commit()
+        _fail_or_retry_expansion(db, job_id, lease_token, e, permanent=True)
         logger.exception("Unexpected job expansion error for %s", job_id)
         return {"status": "failed", "job_id": job_id, "error": str(e)}
+
+
+def _renew_expansion_lease(
+    db: Session,
+    job_id: str,
+    lease_token: str,
+    lease_seconds: Optional[int] = None,
+) -> bool:
+    if lease_seconds is None:
+        lease_seconds = WorkerConfig().job_expansion_lease_seconds
+    try:
+        now = db.execute(select(func.now())).scalar() or datetime.utcnow()
+    except Exception:
+        now = datetime.utcnow()
+
+    updated = (
+        db.query(LintingJob)
+        .filter(
+            LintingJob.job_id == job_id,
+            LintingJob.status == JobStatusEnum.EXPANDING,
+            LintingJob.expansion_lease_token == lease_token,
+        )
+        .update(
+            {
+                LintingJob.expansion_lease_expires_at: now + timedelta(
+                    seconds=lease_seconds
+                ),
+            },
+            synchronize_session=False,
+        )
+    )
+    return updated == 1
+
+
+def _finish_expansion(
+    db: Session,
+    job_id: str,
+    lease_token: Optional[str],
+    new_status: JobStatusEnum,
+) -> Optional[LintingJob]:
+    """带 fencing 的展开完成更新。"""
+    filters = [
+        LintingJob.job_id == job_id,
+        LintingJob.status == JobStatusEnum.EXPANDING,
+    ]
+    if lease_token:
+        filters.append(LintingJob.expansion_lease_token == lease_token)
+
+    job = db.query(LintingJob).filter(*filters).with_for_update().first()
+    if not job:
+        logger.warning("Job %s expansion lease lost before finish", job_id)
+        return None
+
+    job.status = new_status
+    _clear_expansion_lease(job)
+    db.commit()
+    return job
+
+
+def _fail_or_retry_expansion(
+    db: Session,
+    job_id: str,
+    lease_token: Optional[str],
+    error: Exception,
+    *,
+    permanent: bool,
+) -> None:
+    filters = [LintingJob.job_id == job_id]
+    if lease_token:
+        filters.extend([
+            LintingJob.status == JobStatusEnum.EXPANDING,
+            LintingJob.expansion_lease_token == lease_token,
+        ])
+
+    job = (
+        db.query(LintingJob)
+        .filter(*filters)
+        .with_for_update()
+        .first()
+    )
+    if not job:
+        logger.warning(
+            "Job %s expansion lease lost before failure update", job_id
+        )
+        return
+
+    if permanent:
+        job.status = JobStatusEnum.FAILED
+    else:
+        job.status = JobStatusEnum.ACCEPTED
+    job.error_message = str(error)
+    _clear_expansion_lease(job)
+    db.commit()
 
 
 def try_expand_one_job(db: Session) -> Optional[Dict[str, Any]]:

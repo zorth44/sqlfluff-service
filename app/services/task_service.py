@@ -569,11 +569,23 @@ class TaskService:
                     task.error_message = None
                     task.result_file_path = None
                     task.retry_count = 0
+                    # 清除上一次结果元数据，避免报告继续展示旧违规
+                    task.sql_lines = None
+                    task.total_violations = None
+                    task.critical_violations = None
+                    task.severity_info = None
+                    task.severity_minor = None
+                    task.severity_major = None
+                    task.severity_blocker = None
+                    task.severity_critical = None
+                    task.severity_unknown = None
 
                     for optional_field in (
                         "lease_token",
                         "lease_expires_at",
                         "last_error",
+                        "finished_at",
+                        "started_at",
                     ):
                         if hasattr(task, optional_field):
                             setattr(task, optional_field, None)
@@ -581,6 +593,12 @@ class TaskService:
                         task.attempt_count = 0
                     if hasattr(task, "next_attempt_at"):
                         task.next_attempt_at = datetime.utcnow()
+
+                    # 同步清除旧 violations，避免重试期间暴露上次结果
+                    from app.models.database import LintingViolation
+                    self.db.query(LintingViolation).filter(
+                        LintingViolation.task_id == task_id
+                    ).delete(synchronize_session=False)
 
                     successful_retries.append(task_id)
                     affected_job_ids.add(task.job_id)

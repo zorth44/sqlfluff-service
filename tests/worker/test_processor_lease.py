@@ -107,17 +107,17 @@ class TestCommitSuccessWithViolations:
     def test_stale_worker_cannot_update_success(self, db_session, mock_managed_db):
         job, task = _create_job_task(db_session, lease_token="current-lease")
 
-        committed = _commit_success_with_violations(
-            task_id=task.task_id,
-            job=job,
-            lease_token="stale-lease",
-            analysis_result=ANALYSIS_RESULT,
-            result_path=f"results/{job.job_id}/{task.task_id}/stale-lease.json",
-            line_count=10,
-            sql_file_abs_path="/tmp/a.sql",
-        )
+        with pytest.raises(LeaseLostError):
+            _commit_success_with_violations(
+                task_id=task.task_id,
+                job=job,
+                lease_token="stale-lease",
+                analysis_result=ANALYSIS_RESULT,
+                result_path=f"results/{job.job_id}/{task.task_id}/stale-lease.json",
+                line_count=10,
+                sql_file_abs_path="/tmp/a.sql",
+            )
 
-        assert committed is False
         db_session.expire_all()
         refreshed = db_session.query(LintingTask).filter_by(
             task_id=task.task_id
@@ -132,7 +132,7 @@ class TestCommitSuccessWithViolations:
     ):
         job, task = _create_job_task(db_session, lease_token="good-lease")
 
-        committed = _commit_success_with_violations(
+        _commit_success_with_violations(
             task_id=task.task_id,
             job=job,
             lease_token="good-lease",
@@ -142,7 +142,6 @@ class TestCommitSuccessWithViolations:
             sql_file_abs_path="/tmp/a.sql",
         )
 
-        assert committed is True
         db_session.expire_all()
         refreshed = db_session.query(LintingTask).filter_by(
             task_id=task.task_id
@@ -161,7 +160,7 @@ class TestCommitSuccessWithViolations:
     ):
         job, task = _create_job_task(db_session, lease_token="good-lease")
 
-        committed = _commit_success_with_violations(
+        _commit_success_with_violations(
             task_id=task.task_id,
             job=job,
             lease_token="good-lease",
@@ -171,7 +170,6 @@ class TestCommitSuccessWithViolations:
             sql_file_abs_path="/tmp/a.sql",
         )
 
-        assert committed is True
         mock_add_all.assert_called_once()
         inserted = mock_add_all.call_args[0][0]
         assert len(inserted) == 1
@@ -211,3 +209,4 @@ class TestProcessSqlFileLeaseAbandon:
 
         assert result["status"] == "abandoned"
         mock_job_update.assert_not_called()
+        fm.cleanup_stale_result_files.assert_not_called()

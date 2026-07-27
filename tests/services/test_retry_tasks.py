@@ -13,6 +13,8 @@ def _create_task(
     status=TaskStatusEnum.FAILURE,
     job_status=JobStatusEnum.FAILED,
 ):
+    from app.models.database import LintingViolation
+
     job_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
 
@@ -35,14 +37,30 @@ def _create_task(
         claim_id="worker-1:abc123",
         claimed_at=datetime.utcnow(),
         retry_count=2,
+        finished_at=datetime.utcnow(),
+        total_violations=3,
+        critical_violations=1,
+        severity_info=1,
+        severity_major=2,
     )
     db_session.add(job)
     db_session.add(task)
+    db_session.add(
+        LintingViolation(
+            id=1,
+            task_id=task_id,
+            job_id=job_id,
+            rule_code="L001",
+            description="old violation",
+        )
+    )
     db_session.commit()
     return job_id, task_id
 
 
 def test_retry_failed_tasks_success(db_session):
+    from app.models.database import LintingViolation
+
     job_id, task_id = _create_task(db_session)
     service = TaskService(db_session)
 
@@ -58,6 +76,16 @@ def test_retry_failed_tasks_success(db_session):
     assert task.error_message is None
     assert task.result_file_path is None
     assert task.retry_count == 0
+    assert task.finished_at is None
+    assert task.total_violations is None
+    assert task.critical_violations is None
+    assert task.severity_info is None
+    assert (
+        db_session.query(LintingViolation)
+        .filter(LintingViolation.task_id == task_id)
+        .count()
+        == 0
+    )
 
     job = db_session.query(LintingJob).filter(LintingJob.job_id == job_id).one()
     assert job.status == JobStatusEnum.PROCESSING

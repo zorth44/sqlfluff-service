@@ -109,6 +109,7 @@ def process_sql_file(
     result_path = _build_result_path(task.job_id, task.task_id, lease_token)
     file_manager.write_json_file_atomic(result_path, analysis_result)
 
+    # 仅在 fencing 提交成功后才能清理旧结果文件，避免旧 Worker 删掉新结果
     try:
         _commit_success_with_violations(
             task_id=task_id,
@@ -238,12 +239,12 @@ def _commit_success_with_violations(
     result_path: str,
     line_count: Optional[int],
     sql_file_abs_path: str,
-) -> bool:
+) -> None:
     """
     Single transaction: verify lease, replace violations, mark SUCCESS.
 
-    Returns:
-        True if committed; False if lease was lost (transaction rolled back).
+    Raises:
+        LeaseLostError: 租约已丢失，事务回滚，调用方不得清理结果文件
     """
     with managed_db_session() as db:
         if lease_token:
@@ -253,7 +254,9 @@ def _commit_success_with_violations(
                 LintingTask.lease_token == lease_token,
             ).first()
             if not held:
-                return False
+                raise LeaseLostError(
+                    f"Lease lost for task {task_id} before success commit"
+                )
 
         db.query(LintingViolation).filter(
             LintingViolation.task_id == task_id
@@ -345,7 +348,6 @@ def _commit_success_with_violations(
             f"Task {task_id} committed SUCCESS with "
             f"{len(violations)} violations"
         )
-        return True
 
 
 def update_job_status_after_task(db: Session, job_id: str) -> bool:

@@ -2,6 +2,7 @@
 Job 展开幂等与原子领取测试
 """
 
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -11,9 +12,11 @@ from sqlalchemy.orm import sessionmaker
 from app.core.database import Base
 from app.models.database import LintingJob, LintingTask
 from app.schemas.common import JobStatusEnum, SubmissionTypeEnum, TaskStatusEnum
+from app.worker.config import WorkerConfig
 from app.worker.job_processor import (
     claim_job_for_expansion,
     process_job_expansion,
+    reclaim_expired_job_expansions,
     try_expand_one_job,
 )
 
@@ -129,3 +132,37 @@ class TestClaimJobForExpansion:
 
     def test_try_expand_one_job_returns_none_when_queue_empty(self, db_session):
         assert try_expand_one_job(db_session) is None
+
+    def test_claim_sets_expansion_lease(self, db_session):
+        _create_accepted_zip_job(db_session)
+        job = claim_job_for_expansion(db_session, lease_seconds=120)
+        db_session.commit()
+        assert job is not None
+        assert job.status == JobStatusEnum.EXPANDING
+        assert job.expansion_lease_token
+        assert job.expansion_lease_expires_at is not None
+        assert job.expansion_started_at is not None
+
+    def test_reclaim_expired_expanding_job(self, db_session):
+        job = _create_accepted_zip_job(db_session)
+        claimed = claim_job_for_expansion(db_session, lease_seconds=120)
+        db_session.commit()
+        assert claimed is not None
+
+        claimed.expansion_lease_expires_at = datetime.utcnow() - timedelta(seconds=5)
+        db_session.commit()
+
+        count = reclaim_expired_job_expansions(db_session, WorkerConfig())
+        db_session.commit()
+        assert count == 1
+
+        refreshed = db_session.query(LintingJob).filter_by(job_id=job.job_id).one()
+        assert refreshed.status == JobStatusEnum.ACCEPTED
+        assert refreshed.expansion_lease_token is None
+        assert refreshed.error_message and "展开租约过期" in refreshed.error_message
+
+        # 回收后可再次领取
+        again = claim_job_for_expansion(db_session)
+        db_session.commit()
+        assert again is not None
+        assert again.job_id == job.job_id
