@@ -101,7 +101,10 @@ class TaskResultContent(BaseModel):
     summary: Dict[str, Any] = Field(description="分析摘要")
     file_info: Dict[str, Any] = Field(description="文件信息")
     analysis_metadata: Dict[str, Any] = Field(description="分析元数据")
-    parse_tree: Optional[Dict[str, Any]] = Field(default=None, description="SQLFluff解析树，显示SQL语句的语法结构")
+    parse_tree: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="解析树摘要（可选；默认任务结果不再包含完整树文本）",
+    )
     
     class Config:
         schema_extra = {
@@ -132,18 +135,13 @@ class TaskResultContent(BaseModel):
                     "analysis_time": "2025-06-27T09:30:15.654321"
                 },
                 "parse_tree": {
-                    "description": "SQLFluff解析树，显示SQL语句的语法结构",
-                    "tree_structure": {
-                        "file": {
-                            "statement": {
-                                "select_statement": {
-                                    "select_clause": "...",
-                                    "from_clause": "..."
-                                }
-                            }
-                        }
-                    },
-                    "note": "此解析树对应日志中的'Fixed Tree'输出，有助于理解SQL语句的语法结构和调试语法问题"
+                    "description": "可选解析树摘要（默认不生成完整树）",
+                    "tree_info": {
+                        "tree_type": "FileSegment",
+                        "contains_unparsable": False,
+                        "has_syntax_errors": False,
+                        "segment_count": 3
+                    }
                 }
             }
         }

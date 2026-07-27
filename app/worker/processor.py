@@ -100,9 +100,9 @@ def process_sql_file(task_id: str, worker_id: str) -> Dict[str, Any]:
     sql_file_path = file_manager.get_absolute_path(task.source_file_path)
     line_count = count_file_lines(str(sql_file_path))
 
-    # 4. 运行 SQLFluff 分析
+    # 4. 运行 SQLFluff 分析（默认不生成/落盘完整解析树）
     sqlfluff_service = SQLFluffService()
-    logger.info(
+    logger.debug(
         f"Analyzing SQL file: {task.source_file_path}, "
         f"dialect: {job.dialect}, rules: {job.rules}"
     )
@@ -220,7 +220,7 @@ def _save_result_file(
     """保存分析结果 JSON 到 NFS"""
     result_path = f"results/{task.job_id}/{task.task_id}_result.json"
     file_manager.write_json_file(result_path, analysis_result)
-    logger.info(f"Analysis result saved to: {result_path}")
+    logger.debug(f"Analysis result saved to: {result_path}")
     return result_path
 
 
@@ -244,7 +244,7 @@ def _batch_insert_violations(
             LintingViolation.task_id == task.task_id
         ).delete(synchronize_session=False)
         if deleted:
-            logger.info(
+            logger.debug(
                 f"Cleared {deleted} existing violations for task {task.task_id}"
             )
     except Exception as e:
@@ -255,7 +255,7 @@ def _batch_insert_violations(
         return
 
     if not violations:
-        logger.info(f"Task {task.task_id} has no violations, skipping insert")
+        logger.debug(f"Task {task.task_id} has no violations, skipping insert")
         return
 
     # 构建行号到内容的映射
@@ -283,7 +283,7 @@ def _batch_insert_violations(
 
     try:
         db.bulk_insert_mappings(LintingViolation, violation_records)
-        logger.info(
+        logger.debug(
             f"Successfully inserted {len(violation_records)} violations "
             f"for task {task.task_id}"
         )
@@ -344,7 +344,9 @@ def _update_task_success(
     task.error_message = None
 
     db.commit()
-    logger.info(f"Task {task_id} updated to SUCCESS, violations: {total_violations}")
+    logger.debug(
+        f"Task {task_id} updated to SUCCESS, violations: {total_violations}"
+    )
 
 
 def _update_job_status(db: Session, job_id: str) -> None:

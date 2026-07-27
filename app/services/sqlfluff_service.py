@@ -130,7 +130,7 @@ class SQLFluffService:
             
             # 如果有规则需要排除，创建新的linter
             if rules_to_exclude:
-                self.logger.info(f"为方言 {current_dialect} 排除了以下规则: {rules_to_exclude}")
+                self.logger.debug(f"为方言 {current_dialect} 排除了以下规则: {rules_to_exclude}")
                 
                 from sqlfluff.core import Linter
                 filtered_linter = Linter(
@@ -149,7 +149,15 @@ class SQLFluffService:
             self.logger.warning(f"规则过滤失败，使用原始linter: {e}")
             return linter
     
-    def analyze_sql_file(self, file_path: str, dialect: Optional[str] = None, rules: Optional[List[str]] = None, db_session=None) -> Dict[str, Any]:
+    def analyze_sql_file(
+        self,
+        file_path: str,
+        dialect: Optional[str] = None,
+        rules: Optional[List[str]] = None,
+        db_session=None,
+        include_parse_tree: bool = False,
+        detailed_parse_tree: bool = False,
+    ) -> Dict[str, Any]:
         """
         分析单个SQL文件
         
@@ -157,6 +165,8 @@ class SQLFluffService:
             file_path: SQL文件路径（可以是相对路径或绝对路径）
             dialect: SQL方言，如果为None则使用默认方言
             rules: 要应用的规则列表，如果为None则使用默认规则
+            include_parse_tree: 是否附带解析树摘要（默认关闭）
+            detailed_parse_tree: 是否生成完整树文本（仅调试用）
             
         Returns:
             Dict[str, Any]: 分析结果
@@ -184,7 +194,15 @@ class SQLFluffService:
             file_info = self._get_file_info(relative_path)
             
             # 执行分析
-            result = self.analyze_sql_content(sql_content, os.path.basename(file_path), dialect, rules, db_session)
+            result = self.analyze_sql_content(
+                sql_content,
+                os.path.basename(file_path),
+                dialect,
+                rules,
+                db_session,
+                include_parse_tree=include_parse_tree,
+                detailed_parse_tree=detailed_parse_tree,
+            )
             
             # 更新文件信息
             result['file_info'].update(file_info)
@@ -198,7 +216,16 @@ class SQLFluffService:
                 raise
             raise SQLFluffException("分析SQL文件", file_path, str(e))
     
-    def analyze_sql_content(self, sql_content: str, file_name: str = "query.sql", dialect: Optional[str] = None, rules: Optional[List[str]] = None, db_session=None) -> Dict[str, Any]:
+    def analyze_sql_content(
+        self,
+        sql_content: str,
+        file_name: str = "query.sql",
+        dialect: Optional[str] = None,
+        rules: Optional[List[str]] = None,
+        db_session=None,
+        include_parse_tree: bool = False,
+        detailed_parse_tree: bool = False,
+    ) -> Dict[str, Any]:
         """
         分析SQL内容字符串
         
@@ -207,6 +234,8 @@ class SQLFluffService:
             file_name: 文件名（用于结果中显示）
             dialect: SQL方言，如果为None则使用默认方言
             rules: 要应用的规则列表，如果为None则使用默认规则
+            include_parse_tree: 是否附带解析树摘要（默认关闭，避免二次解析与大对象开销）
+            detailed_parse_tree: 是否生成完整树文本（仅调试用，体积大）
             
         Returns:
             Dict[str, Any]: 分析结果
@@ -226,29 +255,12 @@ class SQLFluffService:
                 # 使用默认配置（包括 rules 为 None、空列表或只包含 "default" 的情况）
                 lint_result = linter.lint_string(sql_content)
             
-            # 获取解析树 - 优先从linter结果中获取，fallback到直接解析
-            parse_tree = None
+            # 默认不二次 parse、不序列化整棵树；仅显式开启时提取
             parse_tree_info = None
-            
-            # 方法1: 尝试从linter内部获取解析树
-            try:
-                # 重新解析以获取解析树，但保留错误信息
-                parsed_string = linter.parse_string(sql_content)
-                if parsed_string and parsed_string.tree:
-                    parse_tree_info = self._extract_parse_tree_info(parsed_string.tree)
-                    self.logger.debug(f"从linter成功获取解析树: {file_name}")
-            except Exception as e:
-                self.logger.debug(f"从linter获取解析树失败: {file_name}, 错误: {e}")
-            
-            # 方法2: 如果方法1失败，尝试使用简单API（仅在无语法错误时有效）
-            if not parse_tree_info:
-                try:
-                    parse_tree = sqlfluff.parse(sql_content, dialect=used_dialect)
-                    # 统一转换为我们的详细格式
-                    parse_tree_info = self._extract_parse_tree_info(parse_tree)
-                    self.logger.debug(f"使用简单API成功获取解析树: {file_name}")
-                except Exception as e:
-                    self.logger.debug(f"简单API获取解析树失败: {file_name}, 错误: {e}")
+            if include_parse_tree:
+                parse_tree_info = self._collect_parse_tree_info(
+                    linter, sql_content, used_dialect, detailed=detailed_parse_tree
+                )
             
             # 格式化结果
             formatted_result = self._format_lint_result(lint_result, sql_content, file_name, used_dialect, linter, parse_tree_info, db_session)
@@ -426,65 +438,53 @@ class SQLFluffService:
             # 需要找到其中的SQLLintError列表
             lint_errors = []
             
-            # 调试：记录lint_result的类型和结构
-            self.logger.debug(f"lint_result类型: {type(lint_result)}")
-            self.logger.debug(f"lint_result长度: {len(lint_result) if hasattr(lint_result, '__len__') else 'N/A'}")
-            
             # 方法1: 直接尝试获取violations属性（SQLFluff 3.x版本）
             if hasattr(lint_result, 'violations'):
                 lint_errors = lint_result.violations
-                self.logger.debug(f"从lint_result.violations获取到 {len(lint_errors)} 个违规项")
             
             # 方法2: 如果方法1失败，尝试遍历lint_result
             if not lint_errors:
                 for item in lint_result:
-                    self.logger.debug(f"处理lint_result项: {type(item)} - {item}")
-                    
                     # 检查是否是SQLLintError对象列表
                     if isinstance(item, list):
                         for sub_item in item:
                             if hasattr(sub_item, 'line_no') and hasattr(sub_item, 'description'):
                                 lint_errors.append(sub_item)
-                                self.logger.debug(f"从列表中提取违规项: {sub_item}")
                             # 处理SQLParseError对象
                             elif 'SQLParseError' in str(type(sub_item)):
                                 lint_errors.append(sub_item)
-                                self.logger.debug(f"从列表中提取SQLParseError: {sub_item}")
                     # 检查是否是单个SQLLintError对象
                     elif hasattr(item, 'line_no') and hasattr(item, 'description'):
                         lint_errors.append(item)
-                        self.logger.debug(f"直接提取违规项: {item}")
                     # 检查是否是SQLParseError对象
                     elif 'SQLParseError' in str(type(item)):
                         lint_errors.append(item)
-                        self.logger.debug(f"直接提取SQLParseError: {item}")
                     # 检查是否是文件结果对象（包含violations）
                     elif hasattr(item, 'violations'):
                         lint_errors.extend(item.violations)
-                        self.logger.debug(f"从文件结果中提取 {len(item.violations)} 个违规项")
-                    # 记录调试信息
-                    else:
-                        self.logger.debug(f"跳过非违规项: {type(item)} - {item}")
             
             # 方法3: 尝试使用SQLFluff的API方法获取违规项
             if not lint_errors and hasattr(lint_result, 'get_violations'):
                 try:
                     lint_errors = lint_result.get_violations()
-                    self.logger.debug(f"使用get_violations方法获取到 {len(lint_errors)} 个违规项")
                 except Exception as e:
                     self.logger.debug(f"get_violations方法失败: {e}")
             
-            # 如果没有找到SQLLintError，记录原始数据用于调试
+            # 如果没有找到SQLLintError，记录类型信息用于排查（不 dump 大对象）
             if not lint_errors:
-                self.logger.warning(f"未找到SQLLintError对象，原始数据类型: {[type(item) for item in lint_result]}")
-                self.logger.debug(f"原始lint_result内容: {lint_result}")
+                try:
+                    type_summary = [type(item).__name__ for item in lint_result]
+                except Exception:
+                    type_summary = [type(lint_result).__name__]
+                self.logger.warning(
+                    f"未找到SQLLintError对象，原始数据类型: {type_summary}"
+                )
                 
                 # 尝试最后的方法：直接检查lint_result是否就是违规项列表
                 if hasattr(lint_result, '__iter__') and not isinstance(lint_result, str):
                     for item in lint_result:
                         if hasattr(item, 'line_no') and hasattr(item, 'description'):
                             lint_errors.append(item)
-                            self.logger.debug(f"最后尝试：直接提取违规项: {item}")
             
             # 处理找到的违规项
             for violation in lint_errors:
@@ -497,7 +497,6 @@ class SQLFluffService:
                     if 'SQLParseError' in str(type(violation)):
                         rule_code = 'PRS'
                         rule_name = 'parsing'
-                        self.logger.debug(f"检测到SQLParseError，设置规则代码为PRS: {violation}")
                     else:
                         # 方法1: 从violation.rule获取
                         if hasattr(violation, 'rule') and violation.rule:
@@ -517,7 +516,6 @@ class SQLFluffService:
                             code_match = re.search(r'([A-Z][A-Z0-9_]+)', description)
                             if code_match:
                                 rule_code = code_match.group(1)
-                                self.logger.debug(f"从描述中提取规则代码: {rule_code}")
                         
                         # 方法4: 从rule_name获取（某些版本）
                         if rule_name == "unknown" and hasattr(violation, 'rule_name'):
@@ -528,7 +526,6 @@ class SQLFluffService:
                             desc = violation.description.lower()
                             if 'unparsable' in desc or 'found unparsable' in desc:
                                 rule_code = 'PRS'
-                                self.logger.debug(f"语法错误违规项，强制规则代码为PRS: {violation.description}")
                     
                     # 构建violation字典，处理不同类型的violation对象
                     if 'SQLParseError' in str(type(violation)):
@@ -587,7 +584,6 @@ class SQLFluffService:
                         }
                     
                     violations.append(violation_dict)
-                    self.logger.debug(f"添加违规项: {violation_dict}")
                     
                     # 统计严重程度
                     if violation_dict["severity"] == "critical":
@@ -599,10 +595,11 @@ class SQLFluffService:
                     severity_level = violation_dict.get("severity_level")
                     if severity_level and severity_level.upper() in ["BLOCKER", "CRITICAL"]:
                         critical_violations_count += 1
-                        self.logger.debug(f"检测到严重违规项: {rule_code}, 级别: {severity_level}")
                         
                 except Exception as e:
-                    self.logger.error(f"处理违规项失败: {violation}, 错误: {e}")
+                    self.logger.error(
+                        f"处理违规项失败: {type(violation).__name__}, 错误: {e}"
+                    )
             
             # 计算摘要
             total_violations = len(violations)
@@ -744,64 +741,112 @@ class SQLFluffService:
                 "last_modified": datetime.now().isoformat()
             }
     
-    def _extract_parse_tree_info(self, parse_tree) -> Dict[str, Any]:
+    def _collect_parse_tree_info(
+        self,
+        linter: Linter,
+        sql_content: str,
+        dialect: str,
+        detailed: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """按需解析并提取解析树信息（默认路径不会调用）。"""
+        try:
+            parsed_string = linter.parse_string(sql_content)
+            if parsed_string and parsed_string.tree:
+                return self._extract_parse_tree_info(
+                    parsed_string.tree, detailed=detailed
+                )
+        except Exception as e:
+            self.logger.debug(f"从 linter 获取解析树失败: {e}")
+
+        try:
+            parse_tree = sqlfluff.parse(sql_content, dialect=dialect)
+            return self._extract_parse_tree_info(parse_tree, detailed=detailed)
+        except Exception as e:
+            self.logger.debug(f"简单 API 获取解析树失败: {e}")
+            return None
+
+    def _has_unparsable_segment(self, segment, max_nodes: int = 5000) -> bool:
+        """轻量遍历是否存在 unparsable 段，避免整树字符串化。"""
+        stack = [segment]
+        visited = 0
+        while stack and visited < max_nodes:
+            node = stack.pop()
+            visited += 1
+            try:
+                name = node.__class__.__name__.lower()
+                if "unparsable" in name:
+                    return True
+                get_type = getattr(node, "get_type", None)
+                if callable(get_type) and str(get_type()).lower() == "unparsable":
+                    return True
+                children = getattr(node, "segments", None)
+                if children:
+                    stack.extend(children)
+            except Exception:
+                continue
+        return False
+
+    def _extract_parse_tree_info(
+        self, parse_tree, detailed: bool = False
+    ) -> Dict[str, Any]:
         """
-        从SQLFluff解析树中提取结构化信息
-        
-        Args:
-            parse_tree: SQLFluff解析树对象
-            
-        Returns:
-            Dict[str, Any]: 格式化的解析树信息
+        从SQLFluff解析树中提取结构化信息。
+
+        默认只返回摘要字段；detailed=True 时才生成完整树文本。
         """
         try:
             if not parse_tree:
                 return None
-            
-            # 获取完整的解析树结构（类似日志中的格式）
-            detailed_tree = self._get_detailed_tree_structure(parse_tree)
-            
-            # 获取基本的字符串表示
-            tree_str = str(parse_tree)
-            
-            # 提取关键信息
-            tree_info = {
-                "tree_type": parse_tree.__class__.__name__ if hasattr(parse_tree, '__class__') else "unknown",
-                "raw_tree": tree_str,
-                "detailed_structure": detailed_tree,  # 新增：详细的解析树结构
-                "contains_unparsable": "unparsable" in detailed_tree.lower() if detailed_tree else False,
-                "has_syntax_errors": False
-            }
-            
-            # 检查是否有语法错误
-            if hasattr(parse_tree, 'get_error_segments'):
+
+            contains_unparsable = self._has_unparsable_segment(parse_tree)
+            has_syntax_errors = contains_unparsable
+            error_segments = []
+
+            if hasattr(parse_tree, "get_error_segments"):
                 try:
-                    error_segments = parse_tree.get_error_segments()
-                    if error_segments:
-                        tree_info["has_syntax_errors"] = True
-                        tree_info["error_segments"] = [str(seg) for seg in error_segments]
+                    segs = parse_tree.get_error_segments() or []
+                    if segs:
+                        has_syntax_errors = True
+                        # 仅保留少量摘要，避免日志/结果膨胀
+                        error_segments = [
+                            f"{type(seg).__name__}" for seg in segs[:20]
+                        ]
                 except Exception:
                     pass
-            
-            # 尝试获取更详细的结构信息
-            if hasattr(parse_tree, 'segments'):
+
+            tree_info = {
+                "tree_type": (
+                    parse_tree.__class__.__name__
+                    if hasattr(parse_tree, "__class__")
+                    else "unknown"
+                ),
+                "contains_unparsable": contains_unparsable,
+                "has_syntax_errors": has_syntax_errors,
+            }
+
+            if error_segments:
+                tree_info["error_segments"] = error_segments
+
+            if hasattr(parse_tree, "segments"):
                 try:
                     tree_info["segment_count"] = len(parse_tree.segments)
                 except Exception:
                     pass
-            
-            # 检查是否包含不可解析的段
-            if detailed_tree and "unparsable" in detailed_tree.lower():
-                tree_info["contains_unparsable"] = True
-                tree_info["has_syntax_errors"] = True
-            
+
+            if detailed:
+                detailed_tree = self._get_detailed_tree_structure(parse_tree)
+                tree_info["raw_tree"] = str(parse_tree)
+                tree_info["detailed_structure"] = detailed_tree
+                if detailed_tree and "unparsable" in detailed_tree.lower():
+                    tree_info["contains_unparsable"] = True
+                    tree_info["has_syntax_errors"] = True
+
             return tree_info
-            
+
         except Exception as e:
             self.logger.error(f"提取解析树信息失败: {e}")
             return {
                 "error": f"解析树信息提取失败: {str(e)}",
-                "raw_tree": str(parse_tree) if parse_tree else "None"
             }
     
     def _get_detailed_tree_structure(self, parse_tree) -> str:

@@ -255,6 +255,8 @@ def setup_logging() -> None:
     logging.getLogger("uvicorn").setLevel(logging.INFO)
     logging.getLogger("uvicorn.access").setLevel(logging.INFO)
     logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+    # SQLFluff 内部会输出解析树等大段文本，避免刷屏拖慢 Worker
+    logging.getLogger("sqlfluff").setLevel(logging.WARNING)
     
     logging.info("Logging system initialized", extra={
         'log_level': settings.LOG_LEVEL,
@@ -314,10 +316,15 @@ def setup_third_party_logging() -> None:
         'redis',
         'httpx',
         'urllib3',
+        # SQLFluff 内部会输出解析树等大段文本，统一压到 WARNING
+        'sqlfluff',
     ]
     
     for logger_name in third_party_loggers:
         logging.getLogger(logger_name).setLevel(third_party_level)
+
+    # 无论环境，都避免 sqlfluff 解析树刷屏
+    logging.getLogger('sqlfluff').setLevel(logging.WARNING)
     
     # 特殊处理：SQLAlchemy引擎日志
     if settings.is_development():
