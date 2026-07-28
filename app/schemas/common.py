@@ -90,6 +90,7 @@ class StatusEnum(str, Enum):
 class JobStatusEnum(StatusEnum):
     """工作状态枚举"""
     ACCEPTED = "ACCEPTED"
+    EXPANDING = "EXPANDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     PARTIALLY_COMPLETED = "PARTIALLY_COMPLETED"

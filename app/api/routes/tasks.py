@@ -324,21 +324,13 @@ async def retry_failed_tasks(
         
         # 调用业务服务重试任务
         submitted_tasks, failed_submissions = await task_service.retry_failed_tasks(retry_request.task_ids)
-        
-        # 构造响应
-        failed_info = []
-        for task_id, error in failed_submissions:
-            failed_info.append({
-                "task_id": task_id,
-                "error": error
-            })
-        
+
         response = TaskRetryResponse(
             submitted_tasks=submitted_tasks,
-            failed_submissions=failed_info
+            failed_submissions=failed_submissions,
         )
-        
-        api_logger.info(f"任务重试完成: 成功={len(submitted_tasks)}, 失败={len(failed_info)}")
+
+        api_logger.info(f"任务重试完成: 成功={len(submitted_tasks)}, 失败={len(failed_submissions)}")
         return response
         
     except Exception as e:

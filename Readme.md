@@ -256,13 +256,40 @@ Worker 心跳与状态，供健康检查与僵尸任务回收。
 
 多实例可水平扩展；任务领取依赖 InnoDB 行锁与 `SKIP LOCKED`，无需额外消息中间件。
 
+Worker 使用**任务级租约**（`lease_token` / `lease_expires_at`）：领取时签发租约，执行中续租，结果写入带 fencing 校验；过期租约由扫描线程回收并按指数退避重试。
+
+## 测试
+
+```bash
+# 单元 / SQLite 测试
+export NFS_SHARE_ROOT_PATH=/tmp/sqlfluff_nfs_test
+export DATABASE_URL=sqlite:///./test.db
+export ENVIRONMENT=test
+pytest tests/worker tests/services tests/config tests/api/test_health.py -q
+
+# MySQL 8 并发领取 / SKIP LOCKED / fencing（T00、T18）
+# 需先启动 MySQL，例如:
+#   docker run -d --name sqlfluff-test-mysql -e MYSQL_ROOT_PASSWORD=root \
+#     -e MYSQL_DATABASE=sqlfluff_test -e MYSQL_USER=sqlfluff -e MYSQL_PASSWORD=sqlfluff \
+#     -p 3307:3306 mysql:8.0 --default-authentication-plugin=mysql_native_password
+./scripts/run_mysql_integration_tests.sh
+```
+
+SQLite 测试可保留，但不作为队列并发正确性的依据。
+
 ## Docker（可选）
 
 ```bash
 docker-compose up -d mysql consul web worker
 ```
 
-Compose 中 Web / Worker 共用 NFS 卷与 MySQL；生产请按实际环境调整镜像、副本与挂载。
+Compose 中 Web / Worker 共用 NFS 卷与 MySQL。Web 容器启动时运行 Alembic 迁移；Worker 默认 `SKIP_DB_MIGRATION=1`，可安全水平扩展：
+
+```bash
+docker compose up -d --scale worker=3
+```
+
+多 Worker 实例通过 `hostname_pid`（可选 `WORKER_INSTANCE_ID` 后缀）区分。生产请按实际环境调整镜像、副本与挂载。
 
 ## 生产部署
 

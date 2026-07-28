@@ -526,49 +526,101 @@ class TaskService:
             self.logger.error(f"获取待处理Task失败: {e}")
             raise DatabaseException("查询待处理Task", str(e))
     
-    async def retry_failed_tasks(self, task_ids: List[str]) -> Tuple[List[str], List[str]]:
+    async def retry_failed_tasks(self, task_ids: List[str]) -> Tuple[List[str], List[dict]]:
         """
-        重试失败的Task
-        
+        手动重试失败的Task
+
+        手动重试会将 retry_count 重置为 0，不占用自动重试配额。
+
         Args:
             task_ids: 要重试的Task ID列表
-            
+
         Returns:
-            Tuple[List[str], List[str]]: (成功重试的Task ID列表, 失败的Task ID列表)
+            Tuple[List[str], List[dict]]: (成功重试的Task ID列表, 失败项列表)
+            失败项格式: {"task_id": ..., "error": ...}
         """
         try:
+            from app.schemas.common import JobStatusEnum
+
             successful_retries = []
-            failed_retries = []
-            
+            failed_retries: List[dict] = []
+            affected_job_ids = set()
+
             for task_id in task_ids:
                 try:
                     task = await self.get_task_by_id(task_id)
                     if not task:
-                        failed_retries.append(task_id)
+                        failed_retries.append({
+                            "task_id": task_id,
+                            "error": "任务不存在",
+                        })
                         continue
-                    
-                    # 只能重试失败的Task
+
                     if task.status != TaskStatusEnum.FAILURE:
-                        failed_retries.append(task_id)
+                        failed_retries.append({
+                            "task_id": task_id,
+                            "error": f"任务状态不允许重试: {task.status}",
+                        })
                         continue
-                    
-                    # 重置状态
+
                     task.status = TaskStatusEnum.PENDING
+                    task.claim_id = None
+                    task.claimed_at = None
                     task.error_message = None
                     task.result_file_path = None
-                    
+                    task.retry_count = 0
+                    # 清除上一次结果元数据，避免报告继续展示旧违规
+                    task.sql_lines = None
+                    task.total_violations = None
+                    task.critical_violations = None
+                    task.severity_info = None
+                    task.severity_minor = None
+                    task.severity_major = None
+                    task.severity_blocker = None
+                    task.severity_critical = None
+                    task.severity_unknown = None
+
+                    for optional_field in (
+                        "lease_token",
+                        "lease_expires_at",
+                        "last_error",
+                        "finished_at",
+                        "started_at",
+                    ):
+                        if hasattr(task, optional_field):
+                            setattr(task, optional_field, None)
+                    if hasattr(task, "attempt_count"):
+                        task.attempt_count = 0
+                    if hasattr(task, "next_attempt_at"):
+                        task.next_attempt_at = datetime.utcnow()
+
+                    # 同步清除旧 violations，避免重试期间暴露上次结果
+                    from app.models.database import LintingViolation
+                    self.db.query(LintingViolation).filter(
+                        LintingViolation.task_id == task_id
+                    ).delete(synchronize_session=False)
+
                     successful_retries.append(task_id)
-                    
+                    affected_job_ids.add(task.job_id)
+
                 except Exception as e:
                     self.logger.error(f"重试Task失败: {task_id}, {e}")
-                    failed_retries.append(task_id)
-            
+                    failed_retries.append({
+                        "task_id": task_id,
+                        "error": str(e),
+                    })
+
             if successful_retries:
+                for job_id in affected_job_ids:
+                    job = self.db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
+                    if job:
+                        job.status = JobStatusEnum.PROCESSING
+
                 self.db.commit()
                 self.logger.info(f"重试Task成功: {len(successful_retries)}个")
-            
+
             return successful_retries, failed_retries
-            
+
         except Exception as e:
             self.db.rollback()
             self.logger.error(f"批量重试Task失败: {e}")

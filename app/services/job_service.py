@@ -77,12 +77,10 @@ class JobService:
             self.db.add(job)
             self.db.flush()  # 获取数据库生成的id，但不提交事务
             
-            # 根据类型创建子任务
+            # SINGLE_FILE: 同事务创建 Task；ZIP/文件夹: 保持 ACCEPTED，由 Worker 展开
             if submission_type == SubmissionTypeEnum.SINGLE_FILE:
                 await self._create_single_file_task(job_id, source_path)
-            else:
-                await self._create_zip_archive_tasks(job_id, source_path)
-            
+
             self.db.commit()
             
             # 确保事务提交后数据立即可见
@@ -140,15 +138,13 @@ class JobService:
             )
             
             self.db.add(job)
-            self.db.commit()  # 立即提交，让Job可查询
-            
-            # 异步启动：文件扫描 + Task创建 + Celery派发
-            asyncio.create_task(
-                self._async_scan_create_and_dispatch(job_id, request.extracted_folder_path)
+            self.db.commit()
+
+            self.logger.info(
+                f"Job创建成功（待 Worker 展开）: {job_id}, "
+                f"文件夹: {request.extracted_folder_path}"
             )
-            
-            self.logger.info(f"Job创建成功（异步模式）: {job_id}, 文件夹: {request.extracted_folder_path}")
-            return JobCreateResponse(job_id=job_id)  # 立即返回
+            return JobCreateResponse(job_id=job_id)
             
         except Exception as e:
             self.db.rollback()
@@ -320,37 +316,30 @@ class JobService:
         Returns:
             JobStatusEnum: 计算后的状态
         """
+        from app.services.job_status import (
+            compute_aggregate_job_status,
+            update_job_status_from_tasks,
+        )
+
         try:
             job = await self.get_job_by_id(job_id)
             if not job:
                 raise JobException(ErrorCode.JOB_NOT_FOUND, job_id, "Job不存在")
-            
-            # 获取任务统计
-            total_tasks = job.get_task_count()
-            successful_tasks = job.get_successful_task_count()
-            failed_tasks = job.get_failed_task_count()
-            pending_tasks = job.tasks.filter(LintingTask.status == 'PENDING').count()
-            in_progress_tasks = job.tasks.filter(LintingTask.status == 'IN_PROGRESS').count()
-            
-            # 计算状态
-            if total_tasks == 0:
-                new_status = JobStatusEnum.ACCEPTED
-            elif pending_tasks > 0 or in_progress_tasks > 0:
-                new_status = JobStatusEnum.PROCESSING
-            elif successful_tasks == total_tasks:
-                new_status = JobStatusEnum.COMPLETED
-            elif successful_tasks > 0:
-                new_status = JobStatusEnum.PARTIALLY_COMPLETED
-            else:
-                new_status = JobStatusEnum.FAILED
-            
-            # 如果状态发生变化，更新数据库
-            if job.status != new_status:
-                await self.update_job_status(job_id, new_status)
-            
-            self.logger.debug(f"Job状态计算: {job_id}, {new_status}")
-            return new_status
-            
+
+            tasks = job.tasks.all()
+            if not tasks:
+                return job.status
+
+            new_status = compute_aggregate_job_status(tasks)
+            if new_status and job.status != new_status:
+                if self._is_valid_status_transition(job.status, new_status):
+                    await self.update_job_status(job_id, new_status)
+                else:
+                    update_job_status_from_tasks(self.db, job_id, lock=True)
+
+            self.logger.debug(f"Job状态计算: {job_id}, {new_status or job.status}")
+            return new_status or job.status
+
         except Exception as e:
             self.logger.error(f"计算Job状态失败: {job_id}, 错误: {e}")
             if isinstance(e, JobException):
@@ -381,6 +370,7 @@ class JobService:
             # 统计各状态的Job数量
             total_jobs = query.count()
             accepted_jobs = query.filter(LintingJob.status == JobStatusEnum.ACCEPTED).count()
+            expanding_jobs = query.filter(LintingJob.status == JobStatusEnum.EXPANDING).count()
             processing_jobs = query.filter(LintingJob.status == JobStatusEnum.PROCESSING).count()
             completed_jobs = query.filter(LintingJob.status == JobStatusEnum.COMPLETED).count()
             partially_completed_jobs = query.filter(LintingJob.status == JobStatusEnum.PARTIALLY_COMPLETED).count()
@@ -406,6 +396,7 @@ class JobService:
             return JobStatistics(
                 total_jobs=total_jobs,
                 accepted_jobs=accepted_jobs,
+                expanding_jobs=expanding_jobs,
                 processing_jobs=processing_jobs,
                 completed_jobs=completed_jobs,
                 partially_completed_jobs=partially_completed_jobs,
@@ -698,48 +689,28 @@ class JobService:
                 raise
             raise JobException("创建解压文件夹任务", job_id, str(e))
     
-    async def _async_scan_create_and_dispatch(self, job_id: str, extracted_folder_path: str):
-        """异步处理：文件扫描 + Task创建（Worker 自动领取 PENDING 任务）"""
-        # 为后台任务创建独立的数据库会话
-        from app.core.database import create_database_session
-
-        db = create_database_session()
-        try:
-            self.logger.info(f"开始异步处理: {job_id}")
-
-            # 创建独立的JobService实例，使用新的数据库会话
-            background_job_service = JobService(db)
-
-            # 创建Tasks（状态为 PENDING，Worker 会自动通过 claim_task() 领取）
-            await background_job_service._create_extracted_folder_tasks(job_id, extracted_folder_path)
-
-            self.logger.info(f"异步处理完成: {job_id} (Tasks 已创建为 PENDING)")
-
-        except Exception as e:
-            self.logger.error(f"异步处理失败: {job_id}, 错误: {e}")
-
-            # 设置Job状态为FAILED（使用独立的数据库会话）
-            try:
-                job = db.query(LintingJob).filter(LintingJob.job_id == job_id).first()
-                if job:
-                    job.status = JobStatusEnum.FAILED
-                    db.commit()
-                    self.logger.info(f"Job状态更新为FAILED: {job_id}")
-            except Exception as db_error:
-                self.logger.error(f"更新Job状态失败: {job_id}, {db_error}")
-                db.rollback()
-        finally:
-            # 确保关闭独立的数据库会话
-            db.close()
-    
     def _is_valid_status_transition(self, current_status: JobStatusEnum, new_status: JobStatusEnum) -> bool:
         """验证状态转换是否有效"""
         valid_transitions = {
-            JobStatusEnum.ACCEPTED: [JobStatusEnum.PROCESSING, JobStatusEnum.COMPLETED, JobStatusEnum.FAILED],
-            JobStatusEnum.PROCESSING: [JobStatusEnum.COMPLETED, JobStatusEnum.PARTIALLY_COMPLETED, JobStatusEnum.FAILED],
-            JobStatusEnum.COMPLETED: [],  # 完成状态不能转换
-            JobStatusEnum.PARTIALLY_COMPLETED: [],  # 部分完成状态不能转换
-            JobStatusEnum.FAILED: [JobStatusEnum.PROCESSING]  # 失败状态可以重新处理
+            JobStatusEnum.ACCEPTED: [
+                JobStatusEnum.EXPANDING,
+                JobStatusEnum.PROCESSING,
+                JobStatusEnum.COMPLETED,
+                JobStatusEnum.FAILED,
+            ],
+            JobStatusEnum.EXPANDING: [
+                JobStatusEnum.PROCESSING,
+                JobStatusEnum.FAILED,
+                JobStatusEnum.ACCEPTED,
+            ],
+            JobStatusEnum.PROCESSING: [
+                JobStatusEnum.COMPLETED,
+                JobStatusEnum.PARTIALLY_COMPLETED,
+                JobStatusEnum.FAILED,
+            ],
+            JobStatusEnum.COMPLETED: [],
+            JobStatusEnum.PARTIALLY_COMPLETED: [],
+            JobStatusEnum.FAILED: [JobStatusEnum.PROCESSING, JobStatusEnum.ACCEPTED],
         }
 
-        return new_status in valid_transitions.get(current_status, []) 
+        return new_status in valid_transitions.get(current_status, [])

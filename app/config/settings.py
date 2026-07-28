@@ -35,6 +35,24 @@ class Settings(BaseSettings):
     
     DATABASE_POOL_SIZE: int = Field(default=20, description="数据库连接池大小")
     DATABASE_MAX_OVERFLOW: int = Field(default=30, description="数据库连接池最大溢出")
+    DATABASE_POOL_SIZE_WEB: Optional[int] = Field(
+        default=None, description="Web 进程连接池大小覆盖", env="DATABASE_POOL_SIZE_WEB"
+    )
+    DATABASE_POOL_SIZE_WORKER: Optional[int] = Field(
+        default=None, description="Worker 进程连接池大小覆盖", env="DATABASE_POOL_SIZE_WORKER"
+    )
+    DATABASE_MAX_OVERFLOW_WEB: Optional[int] = Field(
+        default=None, description="Web 进程连接池溢出覆盖", env="DATABASE_MAX_OVERFLOW_WEB"
+    )
+    DATABASE_MAX_OVERFLOW_WORKER: Optional[int] = Field(
+        default=None, description="Worker 进程连接池溢出覆盖", env="DATABASE_MAX_OVERFLOW_WORKER"
+    )
+    WORKER_ROLE: Optional[str] = Field(
+        default=None, description="Worker 进程角色标识", env="WORKER_ROLE"
+    )
+    PROCESS_ROLE: Optional[str] = Field(
+        default=None, description="进程角色（web/worker），用于连接池选择", env="PROCESS_ROLE"
+    )
     DATABASE_POOL_TIMEOUT: int = Field(default=30, description="数据库连接超时时间")
     DATABASE_POOL_RECYCLE: int = Field(default=3600, description="连接回收时间")
     # 默认关闭：Worker 轮询/心跳会高频打 SQL，跟 DEBUG 绑在一起会严重刷屏
@@ -48,6 +66,21 @@ class Settings(BaseSettings):
     WORKER_TASK_TIMEOUT: int = Field(default=1800, description="单任务超时(秒)", env="WORKER_TASK_TIMEOUT")
     WORKER_ZOMBIE_SWEEP_INTERVAL: int = Field(default=120, description="僵尸扫描间隔(秒)", env="WORKER_ZOMBIE_SWEEP_INTERVAL")
     WORKER_MAX_RETRIES: int = Field(default=3, description="任务最大重试次数", env="WORKER_MAX_RETRIES")
+    WORKER_TASK_LEASE_SECONDS: int = Field(default=120, description="任务租约时长(秒)", env="WORKER_TASK_LEASE_SECONDS")
+    WORKER_LEASE_RENEW_INTERVAL: int = Field(default=40, description="租约续期间隔(秒)", env="WORKER_LEASE_RENEW_INTERVAL")
+    WORKER_MAX_BACKOFF_SECONDS: int = Field(default=300, description="退避上限(秒)", env="WORKER_MAX_BACKOFF_SECONDS")
+    WORKER_ANALYZE_SOFT_TIMEOUT: int = Field(default=600, description="分析软超时(秒)", env="WORKER_ANALYZE_SOFT_TIMEOUT")
+    WORKER_ANALYZE_HARD_TIMEOUT: int = Field(default=900, description="分析硬超时(秒)", env="WORKER_ANALYZE_HARD_TIMEOUT")
+    WORKER_JOB_EXPANSION_LEASE_SECONDS: int = Field(
+        default=600,
+        description="Job 展开租约时长(秒)",
+        env="WORKER_JOB_EXPANSION_LEASE_SECONDS",
+    )
+    WORKER_JOB_EXPANSION_POLL_INTERVAL: float = Field(
+        default=2.0,
+        description="Job 展开轮询间隔(秒)",
+        env="WORKER_JOB_EXPANSION_POLL_INTERVAL",
+    )
     
     # ============= NFS共享目录配置 =============
     NFS_SHARE_ROOT_PATH: str = Field(
@@ -105,9 +138,16 @@ class Settings(BaseSettings):
     EXPORT_HTML_FILE_LIMIT: int = Field(default=100, description="HTML报告导出最大文件数限制", env="EXPORT_HTML_FILE_LIMIT")
     EXPORT_HTML_CONTEXT_LINES: int = Field(default=3, description="违规项上下文显示行数", env="EXPORT_HTML_CONTEXT_LINES")
     
-    @validator('ENVIRONMENT')
+    @validator('ENVIRONMENT', pre=True)
     def validate_environment(cls, v):
-        """验证环境配置"""
+        """验证环境配置，兼容常见别名"""
+        if isinstance(v, str):
+            aliases = {
+                'production': 'prod',
+                'development': 'dev',
+                'testing': 'test',
+            }
+            v = aliases.get(v.lower(), v)
         if v not in ['dev', 'test', 'prod']:
             raise ValueError('ENVIRONMENT must be one of: dev, test, prod')
         return v
@@ -197,6 +237,53 @@ class Settings(BaseSettings):
             'task_timeout': self.WORKER_TASK_TIMEOUT,
             'zombie_sweep_interval': self.WORKER_ZOMBIE_SWEEP_INTERVAL,
             'max_retries': self.WORKER_MAX_RETRIES,
+            'task_lease_seconds': self.WORKER_TASK_LEASE_SECONDS,
+            'lease_renew_interval': self.WORKER_LEASE_RENEW_INTERVAL,
+            'max_backoff_seconds': self.WORKER_MAX_BACKOFF_SECONDS,
+            'analyze_soft_timeout': self.WORKER_ANALYZE_SOFT_TIMEOUT,
+            'analyze_hard_timeout': self.WORKER_ANALYZE_HARD_TIMEOUT,
+            'job_expansion_lease_seconds': self.WORKER_JOB_EXPANSION_LEASE_SECONDS,
+            'job_expansion_poll_interval': self.WORKER_JOB_EXPANSION_POLL_INTERVAL,
+        }
+
+    def get_process_role(self) -> str:
+        """Return process role for connection pool selection (web or worker)."""
+        role = self.PROCESS_ROLE or self.WORKER_ROLE or "web"
+        return role.lower()
+
+    def get_database_pool_config(self) -> Dict[str, int]:
+        """
+        Connection pool size by process role.
+
+        Web: pool_size=10, max_overflow=20 (overridable).
+        Worker: pool_size=concurrency+2, max_overflow=concurrency (overridable).
+        """
+        if self.get_process_role() == "worker":
+            concurrency = self.WORKER_CONCURRENCY
+            pool_size = (
+                self.DATABASE_POOL_SIZE_WORKER
+                if self.DATABASE_POOL_SIZE_WORKER is not None
+                else concurrency + 2
+            )
+            max_overflow = (
+                self.DATABASE_MAX_OVERFLOW_WORKER
+                if self.DATABASE_MAX_OVERFLOW_WORKER is not None
+                else concurrency
+            )
+        else:
+            pool_size = (
+                self.DATABASE_POOL_SIZE_WEB
+                if self.DATABASE_POOL_SIZE_WEB is not None
+                else 10
+            )
+            max_overflow = (
+                self.DATABASE_MAX_OVERFLOW_WEB
+                if self.DATABASE_MAX_OVERFLOW_WEB is not None
+                else 20
+            )
+        return {
+            "pool_size": pool_size,
+            "max_overflow": max_overflow,
         }
     
     class Config:

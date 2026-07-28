@@ -673,6 +673,7 @@ class JobStatistics(BaseModel):
     """工作统计信息"""
     total_jobs: int = Field(description="总工作数")
     accepted_jobs: int = Field(description="已接受工作数")
+    expanding_jobs: int = Field(description="展开中工作数")
     processing_jobs: int = Field(description="处理中工作数")
     completed_jobs: int = Field(description="已完成工作数")
     partially_completed_jobs: int = Field(description="部分完成工作数")
@@ -682,8 +683,9 @@ class JobStatistics(BaseModel):
     class Config:
         schema_extra = {
             "example": {
-                "total_jobs": 1000,
+                "total_jobs": 1005,
                 "accepted_jobs": 10,
+                "expanding_jobs": 5,
                 "processing_jobs": 5,
                 "completed_jobs": 800,
                 "partially_completed_jobs": 150,
@@ -710,4 +712,4 @@ class JobTaskIdsResponse(BaseModel):
                 ],
                 "total_count": 3
             }
-        } 
+        }
