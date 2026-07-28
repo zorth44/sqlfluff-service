@@ -51,7 +51,8 @@ class FileManager:
                 return
                 
             self.nfs_root = Path(nfs_root or settings.NFS_SHARE_ROOT_PATH)
-            self._ensure_nfs_root_exists()
+            # 延迟创建目录 / 写权限探测，避免模块导入即产生文件系统副作用
+            self._nfs_ready = False
             
             # 支持的SQL文件扩展名
             self.sql_extensions = {'.sql', '.SQL'}
@@ -66,6 +67,16 @@ class FileManager:
             self.max_zip_files = settings.MAX_ZIP_FILES
             
             self._initialized = True
+
+    def _ensure_ready(self) -> None:
+        """首次实际文件操作时再初始化 NFS 根目录。"""
+        if self._nfs_ready:
+            return
+        with self._lock:
+            if self._nfs_ready:
+                return
+            self._ensure_nfs_root_exists()
+            self._nfs_ready = True
     
     def _ensure_nfs_root_exists(self) -> None:
         """确保NFS根目录存在"""
@@ -107,21 +118,52 @@ class FileManager:
             bool: 是否有写权限
         """
         try:
+            self._ensure_ready()
             self._test_write_permission()
             return True
         except Exception:
             return False
+
+    @staticmethod
+    def _is_absolute_user_path(path: str) -> bool:
+        """判断客户端传入路径是否为绝对路径。"""
+        if not path:
+            return False
+        if path.startswith(('/', '\\')):
+            return True
+        # Windows 盘符路径，例如 C:\foo 或 C:/foo
+        if len(path) >= 2 and path[1] == ':':
+            return True
+        return Path(path).is_absolute()
     
     def get_absolute_path(self, relative_path: str) -> Path:
-        """获取绝对路径
+        """获取绝对路径，并确保结果仍位于 NFS 根目录内。
         
         Args:
             relative_path: 相对于NFS根目录的路径
             
         Returns:
             Path: 绝对路径对象
+
+        Raises:
+            FileException: 路径为空、为绝对路径，或逃逸出 NFS 根目录
         """
-        return self.nfs_root / relative_path.lstrip('/')
+        self._ensure_ready()
+
+        if relative_path is None or not str(relative_path).strip():
+            raise FileException("路径解析", str(relative_path), "路径为空")
+
+        raw = str(relative_path)
+        if self._is_absolute_user_path(raw):
+            raise FileException("路径解析", raw, "不允许使用绝对路径")
+
+        nfs_root = self.nfs_root.resolve()
+        candidate = (nfs_root / raw).resolve()
+
+        if not candidate.is_relative_to(nfs_root):
+            raise FileException("路径解析", raw, "路径超出NFS根目录")
+
+        return candidate
     
     def get_relative_path(self, absolute_path: Union[str, Path]) -> str:
         """获取相对路径
@@ -132,9 +174,10 @@ class FileManager:
         Returns:
             str: 相对于NFS根目录的路径
         """
-        abs_path = Path(absolute_path)
+        self._ensure_ready()
+        abs_path = Path(absolute_path).resolve()
         try:
-            return str(abs_path.relative_to(self.nfs_root))
+            return str(abs_path.relative_to(self.nfs_root.resolve()))
         except ValueError:
             # 如果路径不在NFS根目录下，返回原路径
             return str(abs_path)
@@ -715,8 +758,26 @@ class FileManager:
             file_logger.error(f"清理临时文件失败: {e}")
 
 
-# 全局文件管理器实例
-file_manager = FileManager()
+# 延迟获取全局文件管理器，避免模块导入时初始化 NFS
+_file_manager_instance: Optional[FileManager] = None
+
+
+def get_file_manager() -> FileManager:
+    """获取全局 FileManager 单例（首次调用时创建）。"""
+    global _file_manager_instance
+    if _file_manager_instance is None:
+        _file_manager_instance = FileManager()
+    return _file_manager_instance
+
+
+class _LazyFileManagerProxy:
+    """兼容旧的 `file_manager.xxx` 调用方式，真正使用时才初始化。"""
+
+    def __getattr__(self, name: str):
+        return getattr(get_file_manager(), name)
+
+
+file_manager = _LazyFileManagerProxy()
 
 
 # 便捷函数

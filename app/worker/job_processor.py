@@ -417,7 +417,7 @@ def _handle_zip_file_job(
 
     extract_to = f"jobs/{job.job_id}/extracted"
     try:
-        extract_dir, sql_files = file_manager.extract_zip_file(
+        _, sql_files = file_manager.extract_zip_file(
             job.source_path, extract_to
         )
         logger.info(
@@ -442,12 +442,8 @@ def _handle_zip_file_job(
             permanent=True,
         )
 
-    source_paths = []
-    for sql_file in sql_files:
-        relative_path = os.path.join(extract_dir, sql_file).replace("\\", "/")
-        source_paths.append(relative_path)
-
-    return _create_task_records(db, job, source_paths, None)
+    # extract_zip_file() 返回的 sql_files 已是相对于 NFS 根目录的完整路径
+    return _create_task_records(db, job, sql_files, None)
 
 
 def _create_task_records(

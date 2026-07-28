@@ -624,7 +624,7 @@ class JobService:
         try:
             # 解压ZIP文件
             extract_to = f"jobs/{job_id}/extracted"
-            extracted_dir, sql_files = self.file_manager.extract_zip_file(zip_path, extract_to)
+            _, sql_files = self.file_manager.extract_zip_file(zip_path, extract_to)
             
             if not sql_files:
                 # 没有SQL文件时，直接将Job状态设置为COMPLETED，而不是抛出异常
@@ -635,15 +635,9 @@ class JobService:
             # 批量创建Task
             from app.services.task_service import TaskService
             task_service = TaskService(self.db)
-            
-            # 生成源文件路径列表
-            source_paths = []
-            for sql_file in sql_files:
-                # 相对于NFS根目录的路径
-                relative_path = os.path.join(extracted_dir, sql_file).replace('\\', '/')
-                source_paths.append(relative_path)
-            
-            await task_service.batch_create_tasks(job_id, source_paths)
+
+            # extract_zip_file() 返回的 sql_files 已是相对于 NFS 根目录的完整路径
+            await task_service.batch_create_tasks(job_id, sql_files)
             
             self.logger.info(f"为ZIP文件创建任务: {job_id}, 文件数: {len(sql_files)}")
             
