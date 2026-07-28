@@ -99,7 +99,10 @@ class Settings(BaseSettings):
     
     # ============= 日志配置 =============
     LOG_LEVEL: str = Field(default="INFO", description="日志级别")
-    LOG_FORMAT: str = Field(default="json", description="日志格式: json/text")
+    LOG_FORMAT: str = Field(
+        default="json",
+        description="标准输出日志格式: json/text；本地日志文件固定为 text",
+    )
     LOG_FILE_PATH: Optional[str] = Field(default=None, description="日志文件路径")
     LOG_FILE_BACKUP_COUNT: int = Field(
         default=14,

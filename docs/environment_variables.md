@@ -70,12 +70,12 @@ CONSUL_HEALTH_CHECK_INTERVAL=10s
 ### 日志配置
 ```bash
 LOG_LEVEL=INFO                     # 日志级别
-LOG_FORMAT=json                    # 日志格式: json/text
+LOG_FORMAT=json                    # 仅标准输出格式: json/text
 LOG_FILE_PATH=/var/log/sql-linting.log
 LOG_FILE_BACKUP_COUNT=14           # 按日轮转后保留天数（进程内 gzip 压缩历史日志）
 ```
 
-日志由服务进程内管理：每天午夜轮转当前文件为 `*.YYYY-MM-DD.gz`，并自动删除超过 `LOG_FILE_BACKUP_COUNT` 的历史文件。无需外挂 cron / cleanup 脚本。
+`LOG_FORMAT` 只影响标准输出，便于日志采集系统选择 JSON 或文本。本地滚动日志文件始终使用文本格式，保证 `web.log` 和 `worker.log` 可直接阅读。日志由服务进程内管理：每天午夜轮转当前文件为 `*.YYYY-MM-DD.gz`，并自动删除超过 `LOG_FILE_BACKUP_COUNT` 的历史文件。无需外挂 cron / cleanup 脚本。
 
 ### Web服务配置
 ```bash

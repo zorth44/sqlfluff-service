@@ -192,10 +192,20 @@ class PerformanceLogger:
 
 
 def create_formatter() -> logging.Formatter:
-    """根据 LOG_FORMAT 配置创建格式化器"""
+    """根据 LOG_FORMAT 配置创建标准输出格式化器。"""
     if settings.LOG_FORMAT.lower() == "text":
         return TextFormatter()
     return JSONFormatter()
+
+
+def create_file_formatter() -> logging.Formatter:
+    """创建本地日志文件格式化器。
+
+    本地滚动日志的首要用途是供人工排障，因此不受 ``LOG_FORMAT``
+    影响，始终保持为易读的文本格式。``LOG_FORMAT`` 仅控制标准输出，
+    以便日志采集系统按需接收 JSON 或文本。
+    """
+    return TextFormatter()
 
 
 def setup_logging() -> None:
@@ -218,11 +228,11 @@ def setup_logging() -> None:
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
-    formatter = create_formatter()
+    console_formatter = create_formatter()
     
     # 控制台处理器
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(console_formatter)
     console_handler.addFilter(context_filter)
     root_logger.addHandler(console_handler)
     
@@ -241,7 +251,7 @@ def setup_logging() -> None:
                 delay=False,
                 utc=False,
             )
-            file_handler.setFormatter(formatter)
+            file_handler.setFormatter(create_file_formatter())
             file_handler.addFilter(context_filter)
             root_logger.addHandler(file_handler)
 
@@ -388,4 +398,4 @@ service_logger = get_logger('service')
 
 
 # 模块加载时自动设置日志
-setup_logging() 
+setup_logging()

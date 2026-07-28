@@ -59,6 +59,7 @@ export CONSUL_SERVICE_IP=192.168.1.100
 
 # 日志配置
 export LOG_LEVEL=INFO
+# 仅控制标准输出；web.log / worker.log 始终使用可读文本格式。
 export LOG_FORMAT=json
 export LOG_FILE_BACKUP_COUNT=14
 

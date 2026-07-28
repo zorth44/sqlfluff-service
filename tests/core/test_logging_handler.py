@@ -3,6 +3,7 @@
 import gzip
 import logging
 import os
+import sys
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
@@ -12,7 +13,13 @@ import pytest
 # settings 要求 NFS_SHARE_ROOT_PATH；在导入 logging 模块前兜底
 os.environ.setdefault("NFS_SHARE_ROOT_PATH", tempfile.mkdtemp(prefix="sqlfluff-test-nfs-"))
 
-from app.core.logging import GzipTimedRotatingFileHandler  # noqa: E402
+from app.config.settings import settings  # noqa: E402
+from app.core.logging import (  # noqa: E402
+    GzipTimedRotatingFileHandler,
+    JSONFormatter,
+    TextFormatter,
+    setup_logging,
+)
 
 
 @pytest.fixture
@@ -125,3 +132,53 @@ def test_get_files_to_delete_respects_backup_count(log_dir):
         assert deleted_names[0] < deleted_names[1]
     finally:
         handler.close()
+
+
+@pytest.mark.parametrize(
+    ("console_format", "console_formatter"),
+    [("json", JSONFormatter), ("text", TextFormatter)],
+)
+def test_file_logs_always_use_text_format(
+    tmp_path, monkeypatch, console_format, console_formatter
+):
+    """LOG_FORMAT 只影响标准输出，本地滚动日志始终便于人工阅读。"""
+    log_path = tmp_path / "service.log"
+    root_logger = logging.getLogger()
+    previous_handlers = root_logger.handlers[:]
+    previous_level = root_logger.level
+
+    monkeypatch.setattr(settings, "LOG_FORMAT", console_format)
+    monkeypatch.setattr(settings, "LOG_FILE_PATH", str(log_path))
+    monkeypatch.setattr(settings, "LOG_FILE_BACKUP_COUNT", 2)
+
+    try:
+        setup_logging()
+
+        console_handler = next(
+            handler
+            for handler in root_logger.handlers
+            if isinstance(handler, logging.StreamHandler)
+            and not isinstance(handler, logging.FileHandler)
+            and handler.stream is sys.stdout
+        )
+        file_handler = next(
+            handler
+            for handler in root_logger.handlers
+            if isinstance(handler, GzipTimedRotatingFileHandler)
+        )
+        assert isinstance(console_handler.formatter, console_formatter)
+        assert isinstance(file_handler.formatter, TextFormatter)
+
+        root_logger.info("human-readable file log")
+        file_handler.flush()
+        file_content = log_path.read_text(encoding="utf-8")
+        assert "human-readable file log" in file_content
+        assert " | INFO" in file_content
+        assert not file_content.lstrip().startswith("{")
+    finally:
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+            handler.close()
+        for handler in previous_handlers:
+            root_logger.addHandler(handler)
+        root_logger.setLevel(previous_level)

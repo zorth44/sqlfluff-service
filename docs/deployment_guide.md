@@ -60,6 +60,7 @@ cp env.example .env
 | `WORKER_CONCURRENCY` 等 | 见 `env.example` | DB Worker 并发与超时 |
 | `CONSUL_HOST` / `CONSUL_PORT` | 内网 Consul | 可选 |
 | `CONSUL_SERVICE_IP` | 本机内网 IP | 注册到 Consul 时必填，见 [internal_network_ip_configuration.md](internal_network_ip_configuration.md) |
+| `LOG_FORMAT` | `json` | 仅控制标准输出；`web.log` / `worker.log` 固定为可读文本 |
 | `LOG_FILE_PATH` / `LOG_FILE_BACKUP_COUNT` | 由启动脚本设置 | 进程内按日轮转并 gzip |
 
 完整字段以 [env.example](../env.example) 为准。
