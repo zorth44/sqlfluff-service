@@ -59,9 +59,4 @@ result = service.analyze_sql_content(
     dialect="mysql"
 )
 ```
-
-## 运行演示
-
-```bash
-python examples/dialect_demo.py
-``` 
+ 
