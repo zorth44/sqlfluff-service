@@ -172,3 +172,6 @@ consul_data/
 # 测试文件
 data/
 tmp_hive_stub/
+
+# 部署包
+releases

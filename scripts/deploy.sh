@@ -65,7 +65,8 @@ tar xzf "$PACKAGE_PATH" -C "$CURRENT_DIR"
 
 # 4. 检查环境变量
 echo -e "${YELLOW}[4/5] 检查环境变量...${NC}"
-bash "$APP_DIR/scripts/check_env.sh"
+# 新版本已解压到 current，使用包内脚本以确保启动逻辑与应用版本同步。
+bash "$CURRENT_DIR/scripts/check_env.sh"
 if [ $? -ne 0 ]; then
     echo -e "${RED}环境变量检查失败，请检查 ~/.bashrc 配置${NC}"
     exit 1
@@ -74,9 +75,9 @@ fi
 # 5. 启动服务
 echo -e "${YELLOW}[5/5] 启动服务...${NC}"
 # 启动Web服务
-bash "$APP_DIR/scripts/start_web_new.sh"
+bash "$CURRENT_DIR/scripts/start_web_new.sh"
 # 启动Worker服务  
-bash "$APP_DIR/scripts/start_worker_new.sh"
+bash "$CURRENT_DIR/scripts/start_worker_new.sh"
 
 # 检查启动状态
 sleep 5
