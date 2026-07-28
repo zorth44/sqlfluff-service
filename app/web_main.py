@@ -190,6 +190,26 @@ def _configure_middleware(app: FastAPI):
         
         # 计算响应时间
         process_time = time.time() - start_time
+
+        try:
+            from app.core.metrics import record_http_request
+
+            route = request.scope.get("route")
+            # 已匹配请求使用路由模板（如 /jobs/{job_id}）；未匹配请求统一
+            # 收敛到固定标签，避免随机 404 路径撑爆 Prometheus 时序数量。
+            endpoint = getattr(route, "path", "__unmatched__")
+            record_http_request(
+                request.method,
+                endpoint,
+                response.status_code,
+                process_time,
+            )
+        except Exception as e:
+            # 监控不应影响业务响应
+            api_logger.warning(
+                f"记录HTTP指标失败: {e}",
+                extra={"request_id": request_id},
+            )
         
         # 添加响应头
         response.headers["X-Request-ID"] = request_id
@@ -409,4 +429,4 @@ if __name__ == "__main__":
     print(f"监听地址: {settings.WEB_HOST}:{settings.WEB_PORT}")
     print("正在启动服务...")
     
-    start_dev_server() 
+    start_dev_server()

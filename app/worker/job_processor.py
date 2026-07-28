@@ -127,8 +127,8 @@ def process_job_expansion(db: Session, job: LintingJob) -> Dict[str, Any]:
     """
     展开 Job（调用方已通过 claim 将状态置为 EXPANDING）。
 
-    幂等：若已有 Task 且 Job 已在 PROCESSING，跳过；
-    若 EXPANDING 且已有 Task，补全后转 PROCESSING。
+    幂等：每次都重新扫描输入，并按 source_file_path 只补建缺失 Task。
+    这样 Worker 在展开过程中宕机后，可以从部分结果继续，而不会漏文件或重复建 Task。
     """
     start = time.monotonic()
     job_id = job.job_id
@@ -149,42 +149,16 @@ def process_job_expansion(db: Session, job: LintingJob) -> Dict[str, Any]:
                 f"Expansion lease lost for job {job_id} before processing"
             )
 
-        existing_count = (
+        if job.submission_type == SubmissionTypeEnum.SINGLE_FILE:
+            created_task_ids = _handle_single_file_job(db, job)
+        else:
+            created_task_ids = _handle_archive_job(db, job)
+
+        total_tasks = (
             db.query(LintingTask)
             .filter(LintingTask.job_id == job_id)
             .count()
         )
-
-        if job.status == JobStatusEnum.PROCESSING and existing_count > 0:
-            logger.info("Job %s already processing with tasks, skipping", job_id)
-            return {
-                "status": "skipped",
-                "job_id": job_id,
-                "reason": "Already processing",
-            }
-
-        if existing_count > 0:
-            job = _finish_expansion(db, job_id, lease_token, JobStatusEnum.PROCESSING)
-            if not job:
-                raise JobExpansionLeaseLostError(
-                    f"Expansion lease lost for job {job_id} before finish"
-                )
-            logger.info(
-                "Job %s has %d existing tasks, marked PROCESSING",
-                job_id,
-                existing_count,
-            )
-            return {
-                "status": "skipped",
-                "job_id": job_id,
-                "reason": "Tasks already exist",
-                "total_tasks": existing_count,
-            }
-
-        if job.submission_type == SubmissionTypeEnum.SINGLE_FILE:
-            task_ids = _handle_single_file_job(db, job)
-        else:
-            task_ids = _handle_archive_job(db, job)
 
         job = _finish_expansion(db, job_id, lease_token, JobStatusEnum.PROCESSING)
         if not job:
@@ -197,15 +171,17 @@ def process_job_expansion(db: Session, job: LintingJob) -> Dict[str, Any]:
             record_job_expansion_duration(duration)
 
         logger.info(
-            "Job expansion complete: %s, created %d PENDING tasks",
+            "Job expansion complete: %s, created %d tasks (%d total)",
             job_id,
-            len(task_ids),
+            len(created_task_ids),
+            total_tasks,
         )
         return {
             "status": "success",
             "job_id": job_id,
-            "total_tasks": len(task_ids),
-            "task_ids": task_ids,
+            "total_tasks": total_tasks,
+            "created_tasks": len(created_task_ids),
+            "task_ids": created_task_ids,
         }
 
     except JobExpansionLeaseLostError as e:
@@ -346,7 +322,7 @@ def _handle_single_file_job(db: Session, job: LintingJob) -> List[str]:
         .first()
     )
     if existing:
-        return [existing.task_id]
+        return []
 
     if not file_manager.file_exists(job.source_path):
         raise JobExpansionError(

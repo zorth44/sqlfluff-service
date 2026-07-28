@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,41 @@ def _child_analyze(
             "exc_type": type(exc).__name__,
         }
 
+    _write_child_payload(result_path, payload)
+
+
+def _child_analyze_content(
+    sql_content: str,
+    file_name: str,
+    dialect: Optional[str],
+    rules: Optional[List[str]],
+    result_path: str,
+) -> None:
+    """Child-process entry point for the synchronous SQL-check API."""
+    try:
+        from app.services.sqlfluff_service import SQLFluffService
+
+        service = SQLFluffService()
+        result = service.analyze_sql_content(
+            sql_content=sql_content,
+            file_name=file_name,
+            dialect=dialect,
+            rules=rules,
+            db_session=None,
+        )
+        payload = {"ok": True, "result": result}
+    except Exception as exc:
+        payload = {
+            "ok": False,
+            "error": repr(exc),
+            "exc_type": type(exc).__name__,
+        }
+
+    _write_child_payload(result_path, payload)
+
+
+def _write_child_payload(result_path: str, payload: Dict[str, Any]) -> None:
+    """Atomically publish a child-process result payload."""
     tmp_path = f"{result_path}.partial"
     try:
         with open(tmp_path, "w", encoding="utf-8") as fh:
@@ -106,10 +141,50 @@ def run_analyze_in_process(
         sem.release()
 
 
+def run_analyze_content_in_process(
+    sql_content: str,
+    file_name: str,
+    dialect: Optional[str],
+    rules: Optional[List[str]],
+    soft_timeout: float,
+    hard_timeout: float,
+    concurrency: int = 2,
+) -> Dict[str, Any]:
+    """Analyze SQL text in a spawned subprocess with bounded concurrency."""
+    sem = _get_analyze_semaphore(concurrency)
+    sem.acquire()
+    try:
+        return _run_analysis_subprocess(
+            target=_child_analyze_content,
+            args=(sql_content, file_name, dialect, rules),
+            source_label=file_name,
+            soft_timeout=soft_timeout,
+            hard_timeout=hard_timeout,
+        )
+    finally:
+        sem.release()
+
+
 def _run_analyze_subprocess(
     source_file_path: str,
     dialect: Optional[str],
     rules: Optional[List[str]],
+    soft_timeout: float,
+    hard_timeout: float,
+) -> Dict[str, Any]:
+    return _run_analysis_subprocess(
+        target=_child_analyze,
+        args=(source_file_path, dialect, rules),
+        source_label=source_file_path,
+        soft_timeout=soft_timeout,
+        hard_timeout=hard_timeout,
+    )
+
+
+def _run_analysis_subprocess(
+    target: Callable[..., None],
+    args: Tuple[Any, ...],
+    source_label: str,
     soft_timeout: float,
     hard_timeout: float,
 ) -> Dict[str, Any]:
@@ -120,8 +195,8 @@ def _run_analyze_subprocess(
 
     ctx = mp.get_context("spawn")
     proc = ctx.Process(
-        target=_child_analyze,
-        args=(source_file_path, dialect, rules, result_path),
+        target=target,
+        args=(*args, result_path),
         daemon=True,
     )
     proc.start()
@@ -130,11 +205,12 @@ def _run_analyze_subprocess(
     while proc.is_alive() and time.monotonic() < deadline:
         proc.join(timeout=0.2)
 
-    if proc.is_alive():
+    timed_out = proc.is_alive()
+    if timed_out:
         logger.warning(
             "Analyze process soft timeout (%.1fs) for %s, terminating",
             soft_timeout,
-            source_file_path,
+            source_label,
         )
         proc.terminate()
         remaining = max(0.1, hard_timeout - soft_timeout)
@@ -144,13 +220,15 @@ def _run_analyze_subprocess(
         logger.error(
             "Analyze process hard timeout (%.1fs) for %s, killing",
             hard_timeout,
-            source_file_path,
+            source_label,
         )
         proc.kill()
         proc.join(timeout=5)
+
+    if timed_out:
         _cleanup_result_file(result_path)
         raise TimeoutError(
-            f"SQLFluff analysis exceeded hard timeout ({hard_timeout}s)"
+            f"SQLFluff analysis exceeded timeout ({soft_timeout}s)"
         )
 
     try:

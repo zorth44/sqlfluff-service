@@ -99,6 +99,12 @@ CELERY_TASK_DEFAULT_RETRY_DELAY=60
 ```bash
 SQLFLUFF_DIALECT=mysql
 SQLFLUFF_CONFIG_PATH=/path/to/sqlfluff/config
+
+# 实时 SQL 检查（单个 Web 进程）
+REALTIME_SQL_MAX_CONCURRENCY=2
+REALTIME_SQL_QUEUE_TIMEOUT=5
+REALTIME_SQL_SOFT_TIMEOUT=30
+REALTIME_SQL_HARD_TIMEOUT=35
 ```
 
 ### 文件处理配置
@@ -123,16 +129,6 @@ export DATABASE_URL="mysql+pymysql://username:password@host:port/database"
 export REDIS_HOST="your-redis-host"
 export REDIS_PASSWORD="your-redis-password"
 export NFS_SHARE_ROOT_PATH="/mnt/nfs_share/sql_linting"
-```
-
-### 方法三：Docker环境变量
-```yaml
-# docker-compose.yml
-environment:
-  - DATABASE_URL=mysql+pymysql://username:password@host:port/database
-  - REDIS_HOST=your-redis-host
-  - REDIS_PASSWORD=your-redis-password
-  - NFS_SHARE_ROOT_PATH=/mnt/nfs_share/sql_linting
 ```
 
 ## 配置验证
@@ -175,4 +171,4 @@ LOG_LEVEL=WARNING
 2. **使用强密码和加密连接**
 3. **定期轮换密码和密钥**
 4. **限制数据库和Redis的网络访问**
-5. **使用环境变量或安全的密钥管理系统** 
+5. **使用环境变量或安全的密钥管理系统**

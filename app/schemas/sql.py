@@ -17,7 +17,12 @@ class SQLDialectEnum(str, Enum):
 
 class SQLCheckRequest(BaseModel):
     """SQL检查请求模型"""
-    sql_content: str = Field(..., description="SQL内容", min_length=1)
+    sql_content: str = Field(
+        ...,
+        description="SQL内容（最多 1 MiB 字符）",
+        min_length=1,
+        max_length=1024 * 1024,
+    )
     dialect: SQLDialectEnum = Field(..., description="SQL方言，必须是 hive 或 gbase8a")
     
     @validator('sql_content')

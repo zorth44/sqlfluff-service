@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from starlette.responses import Response
 
 os.environ.setdefault("NFS_SHARE_ROOT_PATH", "/tmp/sqlfluff_test_nfs")
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
@@ -92,3 +93,30 @@ class TestHealthRoutes:
 
         assert exc_info.value.status_code == 503
         assert exc_info.value.detail["status"] == "unhealthy"
+
+    def test_metrics_returns_raw_prometheus_response(self, db_session):
+        response = asyncio.run(health.metrics_endpoint(db=db_session))
+
+        assert isinstance(response, Response)
+        assert response.headers["content-type"].startswith("text/plain")
+        assert b"# HELP" in response.body
+        assert not response.body.startswith(b'"')
+
+    def test_request_metrics_use_route_template_and_actual_status(self, client):
+        with patch("app.core.metrics.record_http_request") as record:
+            response = client.get("/api/v1/health/live")
+
+        assert response.status_code == 200
+        record.assert_called_once()
+        method, endpoint, response_status, duration = record.call_args.args
+        assert method == "GET"
+        assert endpoint == "/api/v1/health/live"
+        assert response_status == 200
+        assert duration >= 0
+
+    def test_unmatched_request_metric_has_bounded_label(self, client):
+        with patch("app.core.metrics.record_http_request") as record:
+            response = client.get("/random/not-found/12345")
+
+        assert response.status_code == 404
+        assert record.call_args.args[:3] == ("GET", "__unmatched__", 404)

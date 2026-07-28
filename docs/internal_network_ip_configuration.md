@@ -48,19 +48,7 @@ export CONSUL_SERVICE_IP=192.168.1.100
 python -m app.web_main
 ```
 
-### 容器化部署
-
-**Docker示例：**
-
-```bash
-# 运行时指定
-docker run -e CONSUL_SERVICE_IP=192.168.1.100 your-image
-
-# 或在Dockerfile中设置
-ENV CONSUL_SERVICE_IP=192.168.1.100
-```
-
-**Kubernetes示例：**
+### Kubernetes 部署
 
 ```yaml
 apiVersion: apps/v1

@@ -5,7 +5,7 @@
 主要用于负载均衡器和服务发现系统的健康检查。
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import os
@@ -335,13 +335,21 @@ async def metrics_endpoint(db: Session = Depends(get_db)):
     """Prometheus指标端点"""
     try:
         from app.core.metrics import get_metrics, collect_queue_gauges
+        from prometheus_client import CONTENT_TYPE_LATEST
+
         collect_queue_gauges(
             db,
             worker_heartbeat_seconds=settings.WORKER_HEARTBEAT_INTERVAL * 3,
         )
-        return get_metrics()
+        return Response(
+            content=get_metrics(),
+            headers={"Content-Type": CONTENT_TYPE_LATEST},
+        )
     except ImportError:
-        return {"error": "Metrics not available"}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Metrics not available",
+        )
 
 
 @router.get("/health/info")
@@ -448,4 +456,4 @@ async def simple_health_check():
         "timestamp": datetime.utcnow().isoformat(),
         "service": "sql-linting-service",
         "version": "1.0.0"
-    } 
+    }

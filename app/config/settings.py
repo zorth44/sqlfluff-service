@@ -120,6 +120,26 @@ class Settings(BaseSettings):
     # SQL检查接口配置
     HIVE_RULES: str = Field(default="", description="Hive方言规则列表，逗号分隔", env="HIVE_RULES")
     GBASE8A_RULES: str = Field(default="", description="GBase8a方言规则列表，逗号分隔", env="GBASE8A_RULES")
+    REALTIME_SQL_MAX_CONCURRENCY: int = Field(
+        default=2,
+        description="实时 SQL 检查最大并发子进程数",
+        env="REALTIME_SQL_MAX_CONCURRENCY",
+    )
+    REALTIME_SQL_QUEUE_TIMEOUT: float = Field(
+        default=5.0,
+        description="实时 SQL 检查等待并发槽位的超时秒数",
+        env="REALTIME_SQL_QUEUE_TIMEOUT",
+    )
+    REALTIME_SQL_SOFT_TIMEOUT: int = Field(
+        default=30,
+        description="实时 SQL 检查子进程软超时秒数",
+        env="REALTIME_SQL_SOFT_TIMEOUT",
+    )
+    REALTIME_SQL_HARD_TIMEOUT: int = Field(
+        default=35,
+        description="实时 SQL 检查子进程硬超时秒数",
+        env="REALTIME_SQL_HARD_TIMEOUT",
+    )
     
     # ============= 文件处理配置 =============
     MAX_FILE_SIZE: int = Field(default=50 * 1024 * 1024, description="最大文件大小(字节)")
@@ -172,6 +192,29 @@ class Settings(BaseSettings):
         env = values.get('ENVIRONMENT', 'dev')
         if env == 'prod':
             return False
+        return v
+
+    @validator(
+        'REALTIME_SQL_MAX_CONCURRENCY',
+        'REALTIME_SQL_QUEUE_TIMEOUT',
+        'REALTIME_SQL_SOFT_TIMEOUT',
+        'REALTIME_SQL_HARD_TIMEOUT',
+    )
+    def validate_positive_realtime_sql_settings(cls, v):
+        """实时检查的并发与超时必须为正数。"""
+        if v <= 0:
+            raise ValueError('realtime SQL concurrency/timeouts must be greater than 0')
+        return v
+
+    @validator('REALTIME_SQL_HARD_TIMEOUT')
+    def validate_realtime_sql_timeouts(cls, v, values):
+        """硬超时必须晚于软超时，以便留出终止进程的时间。"""
+        soft_timeout = values.get('REALTIME_SQL_SOFT_TIMEOUT')
+        if soft_timeout is not None and v <= soft_timeout:
+            raise ValueError(
+                'REALTIME_SQL_HARD_TIMEOUT must be greater than '
+                'REALTIME_SQL_SOFT_TIMEOUT'
+            )
         return v
     
     @validator('CONSUL_HOST', pre=True)
@@ -341,4 +384,4 @@ def validate_production_config(settings: Settings) -> None:
 
 # 模块加载时自动调用配置验证
 if settings.is_production():
-    validate_production_config(settings) 
+    validate_production_config(settings)

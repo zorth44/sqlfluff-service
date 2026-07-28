@@ -2,17 +2,8 @@
 # 运行 MySQL Worker 并发集成测试（T00 / T18）
 #
 # 前置:
-#   1. MySQL 8 可访问（本地或 Docker）
+#   1. MySQL 8 测试库可访问
 #   2. 已创建测试库与用户
-#
-# 快速启动测试库:
-#   docker run -d --name sqlfluff-test-mysql \
-#     -e MYSQL_ROOT_PASSWORD=root \
-#     -e MYSQL_DATABASE=sqlfluff_test \
-#     -e MYSQL_USER=sqlfluff \
-#     -e MYSQL_PASSWORD=sqlfluff \
-#     -p 3307:3306 \
-#     mysql:8.0 --default-authentication-plugin=mysql_native_password
 #
 # 用法:
 #   ./scripts/run_mysql_integration_tests.sh

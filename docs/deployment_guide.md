@@ -181,20 +181,7 @@ tail -f ~/sqlfluff-service/logs/worker.log
 
 `ENVIRONMENT=prod` 时 Web 使用 Gunicorn；`dev`/`test` 使用 Uvicorn。
 
-## 6. Docker Compose（可选）
-
-适合联调，不替代堡垒机生产流程：
-
-```bash
-cp env.example .env
-docker-compose up -d mysql consul web worker
-docker-compose ps
-docker-compose logs -f web worker
-```
-
-Compose 中 Web / Worker 共用 MySQL 与 NFS 卷；生产请改镜像、副本数、真实挂载与密钥。
-
-## 7. 部署检查清单
+## 6. 部署检查清单
 
 - [ ] MySQL 可达，`alembic upgrade head` 已执行
 - [ ] `NFS_SHARE_ROOT_PATH` 在所有 Web/Worker 节点一致且可读写
@@ -203,7 +190,7 @@ Compose 中 Web / Worker 共用 MySQL 与 NFS 卷；生产请改镜像、副本�
 - [ ] 健康检查通过；需要服务发现时 `CONSUL_SERVICE_IP` 已设为内网 IP
 - [ ] 创建测试 Job 后 Task 能从 `PENDING` → `IN_PROGRESS` → 完成
 
-## 8. 故障排查
+## 7. 故障排查
 
 | 现象 | 排查 |
 | --- | --- |

@@ -6,7 +6,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.worker import analyze_process
-from app.worker.analyze_process import run_analyze_in_process, reset_analyze_semaphore
+from app.worker.analyze_process import (
+    reset_analyze_semaphore,
+    run_analyze_content_in_process,
+    run_analyze_in_process,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -110,3 +114,35 @@ def test_worker_config_rejects_invalid_timeouts():
 
     with pytest.raises(ValueError, match="ANALYZE_SOFT_TIMEOUT"):
         WorkerConfig(analyze_soft_timeout=900, analyze_hard_timeout=900)
+
+
+def test_realtime_content_analysis_uses_isolated_process():
+    expected = {"violations": [], "summary": {"total_violations": 0}}
+
+    fake_ctx = MagicMock()
+    fake_ctx.Process = _FakeProcess
+
+    with patch.object(
+        analyze_process.mp, "get_context", return_value=fake_ctx
+    ), patch(
+        "app.services.sqlfluff_service.SQLFluffService.analyze_sql_content",
+        return_value=expected,
+    ) as analyze:
+        result = run_analyze_content_in_process(
+            "SELECT 1;",
+            "query.sql",
+            "hive",
+            ["LT01"],
+            soft_timeout=10,
+            hard_timeout=15,
+            concurrency=2,
+        )
+
+    assert result == expected
+    analyze.assert_called_once_with(
+        sql_content="SELECT 1;",
+        file_name="query.sql",
+        dialect="hive",
+        rules=["LT01"],
+        db_session=None,
+    )

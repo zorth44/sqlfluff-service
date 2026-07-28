@@ -203,50 +203,22 @@ def record_lease_lost() -> None:
     lease_lost_count.inc()
 
 
-class MetricsMiddleware:
-    """FastAPI中间件，用于收集请求指标"""
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        start_time = time.time()
-
-        method = scope.get("method", "UNKNOWN")
-        path = scope.get("path", "/")
-
-        try:
-            await self.app(scope, receive, send)
-
-            request_counter.labels(
-                method=method,
-                endpoint=path,
-                status="200"
-            ).inc()
-
-        except Exception as e:
-            request_counter.labels(
-                method=method,
-                endpoint=path,
-                status="500"
-            ).inc()
-
-            error_counter.labels(
-                error_type=type(e).__name__,
-                component="web"
-            ).inc()
-
-            raise
-        finally:
-            duration = time.time() - start_time
-            request_duration.labels(
-                method=method,
-                endpoint=path
-            ).observe(duration)
+def record_http_request(
+    method: str,
+    endpoint: str,
+    status_code: int,
+    duration_seconds: float,
+) -> None:
+    """Record one HTTP request using a route template to avoid high cardinality."""
+    request_counter.labels(
+        method=method,
+        endpoint=endpoint,
+        status=str(status_code),
+    ).inc()
+    request_duration.labels(
+        method=method,
+        endpoint=endpoint,
+    ).observe(duration_seconds)
 
 
 def start_metrics_server(port: int = 8001):

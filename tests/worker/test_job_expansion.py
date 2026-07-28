@@ -14,6 +14,7 @@ from app.models.database import LintingJob, LintingTask
 from app.schemas.common import JobStatusEnum, SubmissionTypeEnum, TaskStatusEnum
 from app.worker.config import WorkerConfig
 from app.worker.job_processor import (
+    _create_task_records,
     claim_job_for_expansion,
     process_job_expansion,
     reclaim_expired_job_expansions,
@@ -96,23 +97,23 @@ class TestClaimJobForExpansion:
         db_session.commit()
         assert claimed is not None
 
+        source_paths = [
+            "jobs/job-zip-1/extracted/a.sql",
+            "jobs/job-zip-1/extracted/b.sql",
+        ]
+
+        def expand_from_source(db, current_job):
+            return _create_task_records(db, current_job, source_paths)
+
         with patch(
             "app.worker.job_processor._handle_archive_job",
-            return_value=["task-1", "task-2"],
+            side_effect=expand_from_source,
         ) as mock_expand:
             result1 = process_job_expansion(db_session, claimed)
             assert result1["status"] == "success"
+            assert result1["total_tasks"] == 2
+            assert result1["created_tasks"] == 2
             assert mock_expand.call_count == 1
-
-            for tid in ("task-1", "task-2"):
-                db_session.add(
-                    LintingTask(
-                        task_id=tid,
-                        job_id="job-zip-1",
-                        status=TaskStatusEnum.PENDING,
-                        source_file_path=f"jobs/job-zip-1/{tid}.sql",
-                    )
-                )
             db_session.commit()
 
             job_row = db_session.query(LintingJob).filter_by(job_id="job-zip-1").one()
@@ -124,8 +125,10 @@ class TestClaimJobForExpansion:
             assert reclaimed is not None
 
             result2 = process_job_expansion(db_session, reclaimed)
-            assert result2["status"] == "skipped"
-            assert mock_expand.call_count == 1
+            assert result2["status"] == "success"
+            assert result2["total_tasks"] == 2
+            assert result2["created_tasks"] == 0
+            assert mock_expand.call_count == 2
 
         task_count = (
             db_session.query(LintingTask)
@@ -133,6 +136,46 @@ class TestClaimJobForExpansion:
             .count()
         )
         assert task_count == 2
+
+    def test_partial_expansion_creates_only_missing_tasks(self, db_session):
+        job = _create_accepted_zip_job(db_session)
+        db_session.add(
+            LintingTask(
+                task_id="existing-task",
+                job_id=job.job_id,
+                status=TaskStatusEnum.PENDING,
+                source_file_path="jobs/job-zip-1/extracted/a.sql",
+            )
+        )
+        db_session.commit()
+
+        claimed = claim_job_for_expansion(db_session)
+        db_session.commit()
+        assert claimed is not None
+
+        source_paths = [
+            "jobs/job-zip-1/extracted/a.sql",
+            "jobs/job-zip-1/extracted/b.sql",
+        ]
+
+        def resume_expansion(db, current_job):
+            return _create_task_records(db, current_job, source_paths)
+
+        with patch(
+            "app.worker.job_processor._handle_archive_job",
+            side_effect=resume_expansion,
+        ):
+            result = process_job_expansion(db_session, claimed)
+
+        assert result["status"] == "success"
+        assert result["total_tasks"] == 2
+        assert result["created_tasks"] == 1
+        assert (
+            db_session.query(LintingTask)
+            .filter(LintingTask.job_id == job.job_id)
+            .count()
+            == 2
+        )
 
     def test_try_expand_one_job_returns_none_when_queue_empty(self, db_session):
         assert try_expand_one_job(db_session) is None

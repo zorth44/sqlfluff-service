@@ -60,7 +60,6 @@ sqlfluff-service/
 ├── deploy/                  # 打包与发布准备
 ├── docs/                    # 补充文档
 ├── tests/                   # 测试
-├── docker-compose.yml
 ├── env.example
 ├── requirements.txt
 └── DEPLOYMENT_README.md     # 堡垒机部署速览
@@ -111,6 +110,9 @@ cp env.example .env
 | `CONSUL_HOST` / `CONSUL_PORT` | `127.0.0.1` / `8500` | Consul 服务发现 |
 | `CONSUL_SERVICE_IP` | — | 注册到 Consul 的服务 IP |
 | `HIVE_RULES` / `GBASE8A_RULES` | — | 实时检查接口按方言使用的规则列表 |
+| `REALTIME_SQL_MAX_CONCURRENCY` | `2` | 单个 Web 进程的实时 SQL 最大并发分析数 |
+| `REALTIME_SQL_QUEUE_TIMEOUT` | `5` | 实时检查等待并发槽位的超时（秒） |
+| `REALTIME_SQL_SOFT_TIMEOUT` / `REALTIME_SQL_HARD_TIMEOUT` | `30` / `35` | 实时检查子进程软/硬超时（秒） |
 
 更完整的说明见 [docs/environment_variables.md](docs/environment_variables.md)（其中部分 Redis/Celery 条目为历史遗留，当前运行时不再需要）。
 
@@ -214,7 +216,7 @@ POST /api/v1/jobs
 POST /api/v1/sql/check
 ```
 
-同步返回违规列表，适用于编辑器侧即时反馈；Hive / GBase8a 规则可由环境变量配置。
+同步返回违规列表，适用于编辑器侧即时反馈；Hive / GBase8a 规则可由环境变量配置。请求中的 SQL 最长为 1 MiB 字符；分析在隔离子进程中执行，达到并发或超时限制时分别返回 `503` 或 `504`。
 
 ### Health
 
@@ -268,28 +270,11 @@ export ENVIRONMENT=test
 pytest tests/worker tests/services tests/config tests/api/test_health.py -q
 
 # MySQL 8 并发领取 / SKIP LOCKED / fencing（T00、T18）
-# 需先启动 MySQL，例如:
-#   docker run -d --name sqlfluff-test-mysql -e MYSQL_ROOT_PASSWORD=root \
-#     -e MYSQL_DATABASE=sqlfluff_test -e MYSQL_USER=sqlfluff -e MYSQL_PASSWORD=sqlfluff \
-#     -p 3307:3306 mysql:8.0 --default-authentication-plugin=mysql_native_password
+# 需先准备一个可访问的 MySQL 8 测试库，并设置 MYSQL_TEST_DATABASE_URL
 ./scripts/run_mysql_integration_tests.sh
 ```
 
 SQLite 测试可保留，但不作为队列并发正确性的依据。
-
-## Docker（可选）
-
-```bash
-docker-compose up -d mysql consul web worker
-```
-
-Compose 中 Web / Worker 共用 NFS 卷与 MySQL。Web 容器启动时运行 Alembic 迁移；Worker 默认 `SKIP_DB_MIGRATION=1`，可安全水平扩展：
-
-```bash
-docker compose up -d --scale worker=3
-```
-
-多 Worker 实例通过 `hostname_pid`（可选 `WORKER_INSTANCE_ID` 后缀）区分。生产请按实际环境调整镜像、副本与挂载。
 
 ## 生产部署
 
@@ -312,7 +297,6 @@ docker compose up -d --scale worker=3
 | [docs/deployment_guide.md](docs/deployment_guide.md) | 部署手册 |
 | [docs/dialect_configuration.md](docs/dialect_configuration.md) | SQL 方言配置 |
 | [docs/internal_network_ip_configuration.md](docs/internal_network_ip_configuration.md) | 内网 IP / Consul 注册 |
-| [docs/rerun_zip_jobs_sql.md](docs/rerun_zip_jobs_sql.md) | ZIP Job 重跑说明 |
 | [scripts/README_CSV_REPORT.md](scripts/README_CSV_REPORT.md) | CSV 报告脚本 |
 
 ## 许可证

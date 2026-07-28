@@ -4,18 +4,22 @@ SQL检查API路由
 实现SQL实时检查功能的HTTP接口。
 """
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, status
 from typing import Optional, List, Dict, Any
 from collections import defaultdict
 
 from app.schemas.sql import SQLCheckRequest, SQLCheckResponse, SQLViolation
-from app.services.sqlfluff_service import SQLFluffService
 from app.config.settings import get_settings
-from app.core.exceptions import SQLFluffException
 from app.core.logging import api_logger
+from app.worker.analyze_process import run_analyze_content_in_process
 
 router = APIRouter()
 settings = get_settings()
+_realtime_sql_semaphore = asyncio.Semaphore(
+    settings.REALTIME_SQL_MAX_CONCURRENCY
+)
 
 
 def get_rules_for_dialect(dialect: str) -> Optional[List[str]]:
@@ -116,6 +120,8 @@ async def check_sql(request: SQLCheckRequest):
     Raises:
         HTTPException: 
             - 400: 请求参数无效
+            - 503: 实时检查并发已满且等待超时
+            - 504: SQLFluff 分析超时
             - 500: 服务内部错误
     """
     try:
@@ -125,17 +131,35 @@ async def check_sql(request: SQLCheckRequest):
         rules = get_rules_for_dialect(request.dialect.value)
         api_logger.debug(f"使用规则: {rules}")
         
-        # 创建SQLFluff服务实例
-        sqlfluff_service = SQLFluffService()
-        
-        # 执行SQL内容分析
-        result = sqlfluff_service.analyze_sql_content(
-            sql_content=request.sql_content,
-            file_name="query.sql",  # 固定文件名
-            dialect=request.dialect.value,
-            rules=rules,
-            db_session=None  # 不需要数据库会话
-        )
+        acquired = False
+        try:
+            try:
+                await asyncio.wait_for(
+                    _realtime_sql_semaphore.acquire(),
+                    timeout=settings.REALTIME_SQL_QUEUE_TIMEOUT,
+                )
+                acquired = True
+            except asyncio.TimeoutError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="实时 SQL 检查繁忙，请稍后重试",
+                ) from exc
+
+            # SQLFluff 是 CPU 密集型同步代码。在线程中等待独立子进程，既不阻塞
+            # ASGI 事件循环，也能在超时时强制回收失控的分析进程。
+            result = await asyncio.to_thread(
+                run_analyze_content_in_process,
+                request.sql_content,
+                "query.sql",
+                request.dialect.value,
+                rules,
+                settings.REALTIME_SQL_SOFT_TIMEOUT,
+                settings.REALTIME_SQL_HARD_TIMEOUT,
+                settings.REALTIME_SQL_MAX_CONCURRENCY,
+            )
+        finally:
+            if acquired:
+                _realtime_sql_semaphore.release()
         
         # 提取violations部分
         violations_data = result.get("violations", [])
@@ -177,11 +201,13 @@ async def check_sql(request: SQLCheckRequest):
         
         return SQLCheckResponse(violations=merged_violations)
         
-    except SQLFluffException as e:
-        api_logger.error(f"SQLFluff分析失败: {e}")
+    except HTTPException:
+        raise
+    except TimeoutError as e:
+        api_logger.error(f"SQLFluff分析超时: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"SQL分析失败: {str(e)}"
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="SQL 分析超时",
         )
     except Exception as e:
         api_logger.error(f"SQL检查接口异常: {e}")
