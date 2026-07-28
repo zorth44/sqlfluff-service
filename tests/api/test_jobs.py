@@ -91,10 +91,11 @@ class TestJobsAPI:
     def test_get_job_statistics(self, client):
         """测试获取工作统计信息"""
         response = client.get("/api/v1/jobs/statistics")
-        
+
         assert response.status_code == 200
         data = response.json()
         assert "total_jobs" in data
+        assert "expanding_jobs" in data
         assert "completed_jobs" in data
         assert "failed_jobs" in data
         
@@ -241,4 +242,4 @@ class TestJobsAPI:
         response = client.get("/api/v1/jobs/search?size=0")
         assert response.status_code == 400
         response = client.get("/api/v1/jobs/search?size=101")
-        assert response.status_code == 400 
+        assert response.status_code == 400

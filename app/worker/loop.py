@@ -39,6 +39,7 @@ from app.worker.job_processor import (
     try_expand_one_job,
     reclaim_expired_job_expansions,
 )
+from app.services.job_status import reconcile_terminal_processing_jobs
 
 logger = logging.getLogger(__name__)
 
@@ -582,11 +583,17 @@ class LeaseSweepThread(threading.Thread):
                     job_count = reclaim_expired_job_expansions(
                         db, self.ctx.config
                     )
+                    reconciled_job_count = reconcile_terminal_processing_jobs(db)
                 if task_count > 0:
                     logger.warning(f"Reclaimed {task_count} expired lease tasks")
                 if job_count > 0:
                     logger.warning(
                         f"Reclaimed {job_count} expired EXPANDING jobs"
+                    )
+                if reconciled_job_count > 0:
+                    logger.warning(
+                        "Reconciled %d terminal PROCESSING jobs",
+                        reconciled_job_count,
                     )
             except Exception as e:
                 logger.error(f"Lease sweep failed: {e}", exc_info=True)

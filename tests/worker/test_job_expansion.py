@@ -116,10 +116,14 @@ class TestClaimJobForExpansion:
             db_session.commit()
 
             job_row = db_session.query(LintingJob).filter_by(job_id="job-zip-1").one()
-            job_row.status = JobStatusEnum.EXPANDING
+            job_row.status = JobStatusEnum.ACCEPTED
             db_session.commit()
 
-            result2 = process_job_expansion(db_session, job_row)
+            reclaimed = claim_job_for_expansion(db_session)
+            db_session.commit()
+            assert reclaimed is not None
+
+            result2 = process_job_expansion(db_session, reclaimed)
             assert result2["status"] == "skipped"
             assert mock_expand.call_count == 1
 
@@ -166,3 +170,65 @@ class TestClaimJobForExpansion:
         db_session.commit()
         assert again is not None
         assert again.job_id == job.job_id
+
+    def test_renewal_failure_abandons_before_creating_tasks(self, db_session):
+        _create_accepted_zip_job(db_session)
+        claimed = claim_job_for_expansion(db_session)
+        db_session.commit()
+        assert claimed is not None
+
+        with patch(
+            "app.worker.job_processor._renew_expansion_lease",
+            return_value=False,
+        ), patch(
+            "app.worker.job_processor._handle_archive_job",
+        ) as mock_expand:
+            result = process_job_expansion(db_session, claimed)
+
+        assert result["status"] == "abandoned"
+        mock_expand.assert_not_called()
+        assert (
+            db_session.query(LintingTask)
+            .filter(LintingTask.job_id == claimed.job_id)
+            .count()
+            == 0
+        )
+
+    def test_finish_fencing_failure_rolls_back_created_tasks(self, db_session):
+        _create_accepted_zip_job(db_session)
+        claimed = claim_job_for_expansion(db_session)
+        db_session.commit()
+        assert claimed is not None
+
+        def create_uncommitted_task(db, job):
+            task = LintingTask(
+                task_id="stale-worker-task",
+                job_id=job.job_id,
+                status=TaskStatusEnum.PENDING,
+                source_file_path="jobs/job-zip-1/extracted/a.sql",
+            )
+            db.add(task)
+            db.flush()
+            return [task.task_id]
+
+        with patch(
+            "app.worker.job_processor._renew_expansion_lease",
+            return_value=True,
+        ), patch(
+            "app.worker.job_processor._handle_archive_job",
+            side_effect=create_uncommitted_task,
+        ), patch(
+            "app.worker.job_processor._finish_expansion",
+            return_value=None,
+        ):
+            result = process_job_expansion(db_session, claimed)
+
+        # 模拟 managed_db_session 在正常返回后的 commit；rollback 必须已清除 Task。
+        db_session.commit()
+        assert result["status"] == "abandoned"
+        assert (
+            db_session.query(LintingTask)
+            .filter(LintingTask.task_id == "stale-worker-task")
+            .count()
+            == 0
+        )

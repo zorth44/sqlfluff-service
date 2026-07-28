@@ -21,6 +21,7 @@ from app.worker.loop import (
     reclaim_expired_leases,
     mark_stale_workers_dead,
 )
+from app.services.job_status import reconcile_terminal_processing_jobs
 
 
 @pytest.fixture
@@ -344,3 +345,27 @@ class TestMarkStaleWorkersDead:
 
         task = db_session.query(LintingTask).filter_by(task_id="task-1").first()
         assert task.status == TaskStatusEnum.IN_PROGRESS
+
+
+class TestReconcileTerminalProcessingJobs:
+    def test_repairs_processing_job_after_all_tasks_succeed(self, db_session):
+        _create_job(db_session, status=JobStatusEnum.PROCESSING)
+        _create_task(db_session, status=TaskStatusEnum.SUCCESS)
+
+        count = reconcile_terminal_processing_jobs(db_session)
+        db_session.commit()
+
+        assert count == 1
+        job = db_session.query(LintingJob).filter_by(job_id="job-1").one()
+        assert job.status == JobStatusEnum.COMPLETED
+
+    def test_leaves_job_processing_while_active_task_exists(self, db_session):
+        _create_job(db_session, status=JobStatusEnum.PROCESSING)
+        _create_task(db_session, status=TaskStatusEnum.PENDING)
+
+        count = reconcile_terminal_processing_jobs(db_session)
+        db_session.commit()
+
+        assert count == 0
+        job = db_session.query(LintingJob).filter_by(job_id="job-1").one()
+        assert job.status == JobStatusEnum.PROCESSING

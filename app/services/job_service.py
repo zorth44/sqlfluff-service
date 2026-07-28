@@ -370,6 +370,7 @@ class JobService:
             # 统计各状态的Job数量
             total_jobs = query.count()
             accepted_jobs = query.filter(LintingJob.status == JobStatusEnum.ACCEPTED).count()
+            expanding_jobs = query.filter(LintingJob.status == JobStatusEnum.EXPANDING).count()
             processing_jobs = query.filter(LintingJob.status == JobStatusEnum.PROCESSING).count()
             completed_jobs = query.filter(LintingJob.status == JobStatusEnum.COMPLETED).count()
             partially_completed_jobs = query.filter(LintingJob.status == JobStatusEnum.PARTIALLY_COMPLETED).count()
@@ -395,6 +396,7 @@ class JobService:
             return JobStatistics(
                 total_jobs=total_jobs,
                 accepted_jobs=accepted_jobs,
+                expanding_jobs=expanding_jobs,
                 processing_jobs=processing_jobs,
                 completed_jobs=completed_jobs,
                 partially_completed_jobs=partially_completed_jobs,
@@ -711,4 +713,4 @@ class JobService:
             JobStatusEnum.FAILED: [JobStatusEnum.PROCESSING, JobStatusEnum.ACCEPTED],
         }
 
-        return new_status in valid_transitions.get(current_status, []) 
+        return new_status in valid_transitions.get(current_status, [])

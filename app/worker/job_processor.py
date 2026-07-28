@@ -32,6 +32,10 @@ class JobExpansionError(Exception):
         self.permanent = permanent
 
 
+class JobExpansionLeaseLostError(Exception):
+    """Raised when this worker no longer owns the Job expansion lease."""
+
+
 def _clear_expansion_lease(job: LintingJob) -> None:
     job.expansion_lease_token = None
     job.expansion_lease_expires_at = None
@@ -136,9 +140,14 @@ def process_job_expansion(db: Session, job: LintingJob) -> Dict[str, Any]:
         except ImportError:
             record_job_expansion_duration = None
 
-        # 展开期间续租一次（短任务足够；长 ZIP 由 lease 时长覆盖）
-        if lease_token:
-            _renew_expansion_lease(db, job_id, lease_token)
+        # 先确认租约仍归当前 Worker 所有。失败时必须回滚并停止展开，
+        # 否则外层 managed_db_session 会提交失去所有权后创建的 Task。
+        if not lease_token or not _renew_expansion_lease(
+            db, job_id, lease_token
+        ):
+            raise JobExpansionLeaseLostError(
+                f"Expansion lease lost for job {job_id} before processing"
+            )
 
         existing_count = (
             db.query(LintingTask)
@@ -157,11 +166,9 @@ def process_job_expansion(db: Session, job: LintingJob) -> Dict[str, Any]:
         if existing_count > 0:
             job = _finish_expansion(db, job_id, lease_token, JobStatusEnum.PROCESSING)
             if not job:
-                return {
-                    "status": "abandoned",
-                    "job_id": job_id,
-                    "reason": "expansion lease lost",
-                }
+                raise JobExpansionLeaseLostError(
+                    f"Expansion lease lost for job {job_id} before finish"
+                )
             logger.info(
                 "Job %s has %d existing tasks, marked PROCESSING",
                 job_id,
@@ -181,11 +188,9 @@ def process_job_expansion(db: Session, job: LintingJob) -> Dict[str, Any]:
 
         job = _finish_expansion(db, job_id, lease_token, JobStatusEnum.PROCESSING)
         if not job:
-            return {
-                "status": "abandoned",
-                "job_id": job_id,
-                "reason": "expansion lease lost",
-            }
+            raise JobExpansionLeaseLostError(
+                f"Expansion lease lost for job {job_id} before finish"
+            )
 
         duration = time.monotonic() - start
         if record_job_expansion_duration:
@@ -201,6 +206,17 @@ def process_job_expansion(db: Session, job: LintingJob) -> Dict[str, Any]:
             "job_id": job_id,
             "total_tasks": len(task_ids),
             "task_ids": task_ids,
+        }
+
+    except JobExpansionLeaseLostError as e:
+        # 这是 fencing 失败而不是业务失败。必须回滚本次展开创建的 Task，
+        # 且不能修改已由其他 Worker 持有的 Job。
+        db.rollback()
+        logger.warning("Abandoned job expansion for %s: %s", job_id, e)
+        return {
+            "status": "abandoned",
+            "job_id": job_id,
+            "reason": "expansion lease lost",
         }
 
     except JobExpansionError as e:

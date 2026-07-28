@@ -123,3 +123,60 @@ def update_job_status_from_tasks(
         db.rollback()
         logger.exception("Failed to update job status for %s", job_id)
         raise
+
+
+def reconcile_terminal_processing_jobs(db: Session, limit: int = 100) -> int:
+    """Repair PROCESSING Jobs whose Tasks have all reached terminal states.
+
+    Task completion and Job aggregation are intentionally separate transactions.
+    This reconciler closes the failure window where the Task commit succeeds but
+    the following Job status update fails transiently.
+    """
+    if limit <= 0:
+        return 0
+
+    active_task_exists = db.query(LintingTask.id).filter(
+        LintingTask.job_id == LintingJob.job_id,
+        LintingTask.status.in_(tuple(ACTIVE_TASK_STATUSES)),
+    ).exists()
+
+    candidates = (
+        db.query(LintingJob)
+        .filter(
+            LintingJob.status == JobStatusEnum.PROCESSING,
+            ~active_task_exists,
+        )
+        .order_by(LintingJob.id.asc())
+        .with_for_update(skip_locked=True)
+        .limit(limit)
+        .all()
+    )
+
+    reconciled = 0
+    terminal_job_statuses = {
+        JobStatusEnum.COMPLETED,
+        JobStatusEnum.PARTIALLY_COMPLETED,
+        JobStatusEnum.FAILED,
+    }
+    for job in candidates:
+        tasks = (
+            db.query(LintingTask)
+            .filter(LintingTask.job_id == job.job_id)
+            .all()
+        )
+        if not tasks:
+            continue
+
+        new_status = compute_aggregate_job_status(tasks)
+        if new_status not in terminal_job_statuses or job.status == new_status:
+            continue
+
+        job.status = new_status
+        reconciled += 1
+        logger.warning(
+            "Reconciled stale PROCESSING job %s -> %s",
+            job.job_id,
+            new_status.value,
+        )
+
+    return reconciled
