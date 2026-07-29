@@ -13,13 +13,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError, HTTPException
-from fastapi.staticfiles import StaticFiles  # 添加这行
+from fastapi.staticfiles import StaticFiles
+from fastapi.openapi.docs import get_swagger_ui_html
 import uvicorn
 import asyncio
 import time
 import uuid
+from pathlib import Path
 from typing import Union
 from contextlib import asynccontextmanager
+
+# 使用绝对路径，避免启动目录不同导致静态资源找不到
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 from app.api.routes import jobs, tasks, health, sql
 from app.config.settings import get_settings
@@ -90,18 +95,29 @@ def create_app() -> FastAPI:
         FastAPI: 配置完成的FastAPI应用
     """
     # 创建FastAPI应用
+    # docs_url=None：关闭默认 /docs（默认会从 CDN 拉 swagger-ui，内网不可用）
     app = FastAPI(
         title="SQL核验服务",
         description="提供SQL文件质量检查服务，支持单文件和批量ZIP包分析",
         version="1.0.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url=None,
+        redoc_url=None,
         openapi_url="/openapi.json",
         lifespan=lifespan
     )
     
-    # 挂载静态文件目录
-    app.mount("/static", StaticFiles(directory="app/static"), name="static")
+    # 挂载本地静态文件（swagger-ui 等）
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # 使用本地 swagger-ui，避免内网无法访问 CDN
+    @app.get("/docs", include_in_schema=False)
+    async def custom_swagger_ui_html():
+        return get_swagger_ui_html(
+            openapi_url=app.openapi_url,
+            title=f"{app.title} - Swagger UI",
+            swagger_js_url="/static/swagger-ui/swagger-ui-bundle.js",
+            swagger_css_url="/static/swagger-ui/swagger-ui.css",
+        )
     
     # 配置中间件
     _configure_middleware(app)
