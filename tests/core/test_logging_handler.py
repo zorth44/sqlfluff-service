@@ -2,9 +2,11 @@
 
 import gzip
 import logging
+import multiprocessing
 import os
 import sys
 import tempfile
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -132,6 +134,55 @@ def test_get_files_to_delete_respects_backup_count(log_dir):
         assert deleted_names[0] < deleted_names[1]
     finally:
         handler.close()
+
+
+def _emit_after_rollover_from_process(log_path: str, message: str, start_event) -> None:
+    """子进程辅助函数：同时跨过轮转点写同一文件。"""
+    handler = GzipTimedRotatingFileHandler(
+        filename=log_path,
+        when="midnight",
+        interval=1,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    try:
+        start_event.wait(timeout=10)
+        _write_and_close(handler, message)
+    finally:
+        handler.close()
+
+
+def test_concurrent_processes_rollover_without_losing_archive(log_dir):
+    """Gunicorn worker 同时写入时，只能有一个进程执行实际轮转。"""
+    log_path = log_dir / "web.log"
+    log_path.write_text("before rollover\n", encoding="utf-8")
+    yesterday = time.time() - 24 * 60 * 60
+    os.utime(log_path, (yesterday, yesterday))
+
+    context = multiprocessing.get_context("spawn")
+    start_event = context.Event()
+    processes = [
+        context.Process(
+            target=_emit_after_rollover_from_process,
+            args=(str(log_path), f"worker-{index}", start_event),
+        )
+        for index in range(4)
+    ]
+    for process in processes:
+        process.start()
+    start_event.set()
+    for process in processes:
+        process.join(timeout=15)
+        assert process.exitcode == 0
+
+    archives = list(log_dir.glob("web.log.*.gz"))
+    assert len(archives) == 1
+    with gzip.open(archives[0], "rt", encoding="utf-8") as f:
+        assert "before rollover" in f.read()
+
+    current_content = log_path.read_text(encoding="utf-8")
+    for index in range(4):
+        assert f"worker-{index}" in current_content
 
 
 @pytest.mark.parametrize(

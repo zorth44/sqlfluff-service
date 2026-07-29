@@ -6,6 +6,7 @@
 """
 
 import gzip
+from contextlib import contextmanager
 import logging
 import logging.handlers
 import sys
@@ -20,13 +21,24 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 from app.config.settings import settings
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - 仅 Windows 不提供 fcntl
+    fcntl = None
+
 # 模块级变量用于存储上下文过滤器和性能日志记录器
 _context_filter: Optional['ContextFilter'] = None
 _performance_logger: Optional['PerformanceLogger'] = None
 
 
 class GzipTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
-    """按日轮转；轮转时 gzip 压缩，并按 backupCount 清理历史文件（含 .gz）。"""
+    """支持多进程的按日轮转文件处理器。
+
+    Gunicorn 的多个 worker 会同时向同一个 ``web.log`` 写入。标准库的
+    ``TimedRotatingFileHandler`` 只保证线程安全：多个进程在午夜同时轮转时
+    会互相覆盖归档，甚至继续写入已被删除的旧 inode。这里使用与日志文件
+    相邻的 ``.lock`` 文件，在每次写入和轮转期间持有进程间排他锁。
+    """
 
     # 匹配 YYYY-MM-DD 与 YYYY-MM-DD.gz（兼容尚未压缩的旧轮转文件）
     _BACKUP_EXT_MATCH = re.compile(r"^\d{4}-\d{2}-\d{2}(\.\w+)?(\.gz)?$", re.ASCII)
@@ -42,10 +54,123 @@ class GzipTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
 
     @staticmethod
     def _gzip_rotator(source: str, dest: str) -> None:
+        # 目标文件可能来自服务重启后的补偿轮转。gzip 允许拼接多个 member，
+        # 读取工具会自动连续解压，因此追加可以避免覆盖已有归档。
+        mode = "ab" if os.path.exists(dest) else "wb"
         with open(source, "rb") as f_in:
-            with gzip.open(dest, "wb") as f_out:
+            with gzip.open(dest, mode) as f_out:
                 shutil.copyfileobj(f_in, f_out)
         os.remove(source)
+
+    @property
+    def _lock_path(self) -> str:
+        directory, filename = os.path.split(self.baseFilename)
+        # 隐藏锁文件不使用 ``web.log.*`` 命名，避免被归档 glob 或运维脚本
+        # 误认为一份历史日志。
+        return os.path.join(directory, f".{filename}.lock")
+
+    @contextmanager
+    def _process_lock(self):
+        """在 Linux/macOS 上串行化同一日志文件的跨进程读写。"""
+        lock_fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            if fcntl is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+
+    def _base_file_is_from_today(self) -> bool:
+        try:
+            today_start = time.mktime(date.today().timetuple())
+            return os.path.getmtime(self.baseFilename) >= today_start
+        except OSError:
+            return False
+
+    def _reopen_if_replaced_locked(self) -> None:
+        """其他进程轮转后，丢弃本进程指向旧 inode 的文件描述符。"""
+        if self.stream is None:
+            if not self.delay:
+                self.stream = self._open()
+            return
+
+        try:
+            stream_stat = os.fstat(self.stream.fileno())
+            path_stat = os.stat(self.baseFilename)
+            unchanged = (
+                stream_stat.st_dev == path_stat.st_dev
+                and stream_stat.st_ino == path_stat.st_ino
+            )
+        except OSError:
+            unchanged = False
+
+        if not unchanged:
+            self.stream.close()
+            self.stream = self._open()
+
+    def _set_next_rollover_at(self, current_time: int) -> None:
+        """按标准库 TimedRotatingFileHandler 的规则计算下一个轮转点。"""
+        new_rollover_at = self.computeRollover(current_time)
+        while new_rollover_at <= current_time:
+            new_rollover_at += self.interval
+
+        if (self.when == "MIDNIGHT" or self.when.startswith("W")) and not self.utc:
+            dst_now = time.localtime(current_time)[-1]
+            dst_at_rollover = time.localtime(new_rollover_at)[-1]
+            if dst_now != dst_at_rollover:
+                new_rollover_at += -3600 if not dst_now else 3600
+        self.rolloverAt = new_rollover_at
+
+    def _do_rollover_locked(self, force: bool = False) -> None:
+        """在已持有进程锁时执行轮转或接入其他进程创建的新文件。"""
+        current_time = int(time.time())
+
+        # 其他 worker 已先完成轮转：只需重新打开当前文件，不能再次归档。
+        if not force and self._base_file_is_from_today():
+            self._reopen_if_replaced_locked()
+            self._set_next_rollover_at(current_time)
+            return
+
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+
+        # 与标准库的命名规则保持一致；不删除同名 gzip，避免补偿轮转覆盖历史。
+        time_tuple = time.gmtime(self.rolloverAt - self.interval) if self.utc else time.localtime(
+            self.rolloverAt - self.interval
+        )
+        destination = self.rotation_filename(
+            self.baseFilename + "." + time.strftime(self.suffix, time_tuple)
+        )
+        if os.path.exists(self.baseFilename):
+            self.rotate(self.baseFilename, destination)
+
+        if self.backupCount > 0:
+            for old_file in self.getFilesToDelete():
+                os.remove(old_file)
+
+        if not self.delay:
+            self.stream = self._open()
+        self._set_next_rollover_at(current_time)
+
+    def doRollover(self) -> None:
+        """兼容显式强制轮转，并保证启动补偿轮转同样具备进程安全性。"""
+        with self._process_lock():
+            self._do_rollover_locked(force=True)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """串行化写入，避免轮转期间其他 worker 写入旧文件描述符。"""
+        try:
+            with self._process_lock():
+                if self.shouldRollover(record):
+                    self._do_rollover_locked()
+                else:
+                    self._reopen_if_replaced_locked()
+                logging.FileHandler.emit(self, record)
+        except Exception:
+            self.handleError(record)
 
     def getFilesToDelete(self) -> List[str]:
         """确定超过 backupCount 的历史文件（含未压缩与 .gz）。"""
@@ -230,11 +355,13 @@ def setup_logging() -> None:
 
     console_formatter = create_formatter()
     
-    # 控制台处理器
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(console_formatter)
-    console_handler.addFilter(context_filter)
-    root_logger.addHandler(console_handler)
+    # 控制台处理器。部署脚本关闭它，避免应用日志再被重定向到未轮转的
+    # *.startup.log；本地开发和容器采集场景保持默认开启。
+    if settings.LOG_CONSOLE_ENABLED:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(console_formatter)
+        console_handler.addFilter(context_filter)
+        root_logger.addHandler(console_handler)
     
     # 文件处理器：按日轮转 + gzip 压缩 + 按 backupCount 保留
     if settings.LOG_FILE_PATH:

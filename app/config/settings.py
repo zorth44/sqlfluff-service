@@ -103,6 +103,10 @@ class Settings(BaseSettings):
         default="json",
         description="标准输出日志格式: json/text；本地日志文件固定为 text",
     )
+    LOG_CONSOLE_ENABLED: bool = Field(
+        default=True,
+        description="是否输出应用日志到标准输出；部署脚本关闭以避免与启动诊断日志混写",
+    )
     LOG_FILE_PATH: Optional[str] = Field(default=None, description="日志文件路径")
     LOG_FILE_BACKUP_COUNT: int = Field(
         default=14,

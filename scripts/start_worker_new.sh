@@ -43,6 +43,8 @@ fi
 # 使用应用内日志轮转：固定文件名 + 按日轮转
 export LOG_FILE_PATH="$LOG_DIR/worker.log"
 export LOG_FILE_BACKUP_COUNT=14
+# 应用日志只写入具备进程安全轮转的 worker.log，避免复制到 startup 日志。
+export LOG_CONSOLE_ENABLED=false
 STARTUP_LOG="$LOG_DIR/worker.startup.log"
 
 echo "启动 DB-as-Queue Worker 服务..."
@@ -51,8 +53,7 @@ echo "日志文件: $LOG_FILE_PATH"
 echo "启动诊断日志: $STARTUP_LOG"
 echo "并发数: ${WORKER_CONCURRENCY:-4}"
 
-# 应用在日志系统初始化前退出时，正式日志文件尚未创建。保留标准输出和错误，
-# 以便启动失败时能在部署终端看到实际异常。
+# 这里只保留启动阶段诊断；应用日志由 worker.log 统一轮转归档。
 : > "$STARTUP_LOG"
 
 # 设置Python路径

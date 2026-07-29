@@ -71,11 +71,12 @@ CONSUL_HEALTH_CHECK_INTERVAL=10s
 ```bash
 LOG_LEVEL=INFO                     # 日志级别
 LOG_FORMAT=json                    # 仅标准输出格式: json/text
+LOG_CONSOLE_ENABLED=true           # 是否将应用日志输出到标准输出
 LOG_FILE_PATH=/var/log/sql-linting.log
 LOG_FILE_BACKUP_COUNT=14           # 按日轮转后保留天数（进程内 gzip 压缩历史日志）
 ```
 
-`LOG_FORMAT` 只影响标准输出，便于日志采集系统选择 JSON 或文本。本地滚动日志文件始终使用文本格式，保证 `web.log` 和 `worker.log` 可直接阅读。日志由服务进程内管理：每天午夜轮转当前文件为 `*.YYYY-MM-DD.gz`，并自动删除超过 `LOG_FILE_BACKUP_COUNT` 的历史文件。无需外挂 cron / cleanup 脚本。
+`LOG_FORMAT` 只影响标准输出，便于日志采集系统选择 JSON 或文本。本地滚动日志文件始终使用文本格式，保证 `web.log` 和 `worker.log` 可直接阅读。日志由服务进程内管理：每天午夜后的首条日志触发轮转，历史为 `*.YYYY-MM-DD.gz`，并自动删除超过 `LOG_FILE_BACKUP_COUNT` 的文件。多个 Gunicorn worker 共用同一日志文件时，写入和轮转会由进程锁串行化。部署脚本将 `LOG_CONSOLE_ENABLED` 设为 `false`，避免应用日志重复写入未轮转的 `*.startup.log`。
 
 ### Web服务配置
 ```bash
