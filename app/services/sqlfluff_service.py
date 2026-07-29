@@ -497,6 +497,8 @@ class SQLFluffService:
                     if 'SQLParseError' in str(type(violation)):
                         rule_code = 'PRS'
                         rule_name = 'parsing'
+                    elif hasattr(violation, '_code') and violation._code and violation._code == 'PRC':
+                        rule_code = violation._code
                     else:
                         # 方法1: 从violation.rule获取
                         if hasattr(violation, 'rule') and violation.rule:
